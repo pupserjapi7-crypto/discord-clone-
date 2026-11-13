@@ -4,9 +4,9 @@ use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    DisplayMediaStreamConstraints, HtmlElement, HtmlMediaElement, HtmlVideoElement, MediaStream,
-    MediaStreamConstraints, MediaStreamTrack, MessageEvent, RtcDataChannel, RtcPeerConnection,
-    RtcSdpType, RtcSessionDescriptionInit, RtcTrackEvent,
+    DisplayMediaStreamConstraints, HtmlElement, HtmlMediaElement, HtmlVideoElement, MediaDevices,
+    MediaStream, MediaStreamConstraints, MediaStreamTrack, MessageEvent, RtcDataChannel,
+    RtcPeerConnection, RtcSdpType, RtcSessionDescriptionInit, RtcTrackEvent, Window,
 };
 
 use crate::api;
@@ -36,6 +36,32 @@ fn js_error(value: JsValue, context: &str) -> String {
         })
         .unwrap_or_else(|| format!("{value:?}"));
     format!("{context}: {detail}")
+}
+
+/// Prüft vor dem Zugriff, ob der Browser die Medien-API überhaupt bereitstellt.
+/// Auf einer unsicheren HTTP-Seite ist `navigator.mediaDevices` `undefined`;
+/// ein direkter Aufruf würde sonst mit einem nichtssagenden JS-Fehler abbrechen.
+fn media_devices(window: &Window, method: &str) -> Result<MediaDevices, String> {
+    let secure = Reflect::get(window.as_ref(), &JsValue::from_str("isSecureContext"))
+        .ok()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let navigator = window.navigator();
+    let value = Reflect::get(navigator.as_ref(), &JsValue::from_str("mediaDevices"))
+        .map_err(|err| js_error(err, "Medien-API nicht lesbar"))?;
+    let function = Reflect::get(&value, &JsValue::from_str(method))
+        .ok()
+        .filter(|function| function.is_function());
+    if value.is_undefined() || value.is_null() || function.is_none() {
+        return Err(if secure {
+            "Dieser Browser stellt keine Medien-API bereit. Bitte einen aktuellen Chrome, Edge oder Firefox verwenden."
+                .to_string()
+        } else {
+            "Mikrofon und Bildschirmfreigabe brauchen einen sicheren Kontext (HTTPS oder localhost). Nova läuft gerade über HTTP; bitte die Seite über HTTPS öffnen."
+                .to_string()
+        });
+    }
+    Ok(value.unchecked_into())
 }
 
 fn media_constraints(audio: bool, video: bool) -> MediaStreamConstraints {
@@ -70,10 +96,7 @@ fn media_constraints(audio: bool, video: bool) -> MediaStreamConstraints {
 
 async fn request_screen() -> Result<MediaStream, String> {
     let window = web_sys::window().ok_or("kein Browserfenster")?;
-    let devices = window
-        .navigator()
-        .media_devices()
-        .map_err(|err| js_error(err, "Bildschirmfreigabe nicht verfügbar"))?;
+    let devices = media_devices(&window, "getDisplayMedia")?;
     let constraints = DisplayMediaStreamConstraints::new();
     constraints.set_audio(&JsValue::FALSE);
     let width = js_sys::Object::new();
@@ -104,10 +127,7 @@ async fn request_screen() -> Result<MediaStream, String> {
 
 async fn request_media(audio: bool, video: bool) -> Result<MediaStream, String> {
     let window = web_sys::window().ok_or("kein Browserfenster")?;
-    let navigator = window.navigator();
-    let devices = navigator
-        .media_devices()
-        .map_err(|err| js_error(err, "Mikrofon/Zugriff nicht verfügbar"))?;
+    let devices = media_devices(&window, "getUserMedia")?;
     let promise = devices
         .get_user_media_with_constraints(&media_constraints(audio, video))
         .map_err(|err| js_error(err, "Mikrofon/Bildschirm verweigert"))?;

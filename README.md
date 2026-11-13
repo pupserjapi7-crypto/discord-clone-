@@ -4,12 +4,12 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 
 **Prioritäten:** Voice-Latenz → Performance/Ressourcen → Design/UX → Features → Sicherheit (immer Pflicht).
 
-## Status v0.2.0
+## Status v0.2.1
 
 | Phase | Zustand |
 |---|---|
 | M0: Architektur + Rust-only-UI | **fertig** — Dioxus 0.7 (Web-WASM + Tauri-Shell), kein Node/npm |
-| M1: Gateway + Auth + Text-Chat | **live** auf `http://85.215.175.202`; 1.000 WS ohne Fehler, Dispatch-p99 3,3 ms |
+| M1: Gateway + Auth + Text-Chat | **live** auf `https://85-215-175-202.sslip.io`; 1.000 WS ohne Fehler, Dispatch-p99 3,3 ms |
 | M2: Voice (str0m-SFU) | **implementiert** — ICE/DTLS im Zwei-Client-Test verbunden |
 | M3: UI | **implementiert** — Auth, Guilds, Kanäle, Chat, Invites, Voice-Dock, Mute, Screenshare-UI |
 | M4: Screenshare 1080p60 | **Video-Pfad verifiziert** (1920×1080@60 synthetisch, zwei Teilnehmer); Threads/Moderation/Bot-API offen |

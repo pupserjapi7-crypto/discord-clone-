@@ -8,7 +8,7 @@ WebKitGTK on Linux); no Electron and no bundled Chromium.
 | --- | --- |
 | Source | `desktop/src-tauri` (excluded from the server workspace) |
 | Window | 1280×800, minimum 960×600, title “Nova” |
-| Loads | `http://85.215.175.202` by default |
+| Loads | `https://85-215-175-202.sslip.io` by default |
 | Override | `NOVA_DESKTOP_URL=https://… nova.exe` |
 | Installer | `Nova_<version>_x64-setup.exe` (NSIS, per-user, no admin) |
 | Bundle id | `dev.nova.desktop` |
@@ -34,7 +34,7 @@ cd desktop
 cargo tauri build --bundles nsis,msi
 ```
 
-Output: `desktop/src-tauri/target/release/bundle/nsis/Nova_0.2.0_x64-setup.exe` und `bundle/msi/Nova_0.2.0_x64_en-US.msi`.
+Output: `desktop/src-tauri/target/release/bundle/nsis/Nova_0.2.1_x64-setup.exe` und `bundle/msi/Nova_0.2.1_x64_en-US.msi`.
 The GitHub release workflow builds this automatically on `windows-latest` and
 attaches the installer to the release tag.
 
@@ -44,5 +44,6 @@ attaches the installer to the release tag.
   may show a warning.
 - Tauri auto-updater: requires a signing keypair and a hosted update manifest.
   Until then, install a newer release over the old one.
-- Voice/screenshare (M2): WebView2 supports WebRTC, so the same client will work
-  in the desktop window once the feature exists.
+- Voice/screenshare: WebView2/WebKitGTK support WebRTC; the default origin is
+  HTTPS, so microphone and display capture get a secure context. The SFU still
+  needs inbound UDP 40000–40100 on the VPS firewall.

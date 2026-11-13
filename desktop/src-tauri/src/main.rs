@@ -2,7 +2,7 @@
 
 fn main() {
     let target = std::env::var("NOVA_DESKTOP_URL")
-        .unwrap_or_else(|_| "http://85.215.175.202".to_owned());
+        .unwrap_or_else(|_| "https://85-215-175-202.sslip.io".to_owned());
 
     tauri::Builder::default()
         .setup(move |app| {

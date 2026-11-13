@@ -1,21 +1,24 @@
 # Production deployment (Plesk VPS)
 
-Live endpoint: **http://85.215.175.202** (HTTP only, no domain/TLS yet).
+Live endpoint: **https://85-215-175-202.sslip.io** (Let's Encrypt, gültig bis 2027-02-11).
+HTTP bleibt unter `http://85.215.175.202` erreichbar, wird aber nicht mehr für
+Voice genutzt.
 
 ## Topology
 
 | Part | Value |
 | --- | --- |
 | Host | Debian 13, 2 vCPU, 1.841 MB RAM, Plesk Obsidian 18.0.82.2 |
-| Nova binary | `/opt/nova/current/nova` (currently 0.1.4) |
+| Nova binary | `/opt/nova/current/nova` (currently 0.2.1) |
 | Service | `nova.service`, user `nova`, `MemoryMax=900M` |
 | App listener | `0.0.0.0:8080` (blocked externally; loopback only in practice) |
-| Public entry | Plesk Apache IP vhost `85.215.175.202:80` reverse-proxies to `127.0.0.1:8080` |
+| Public entry | Apache-vHosts `85.215.175.202:80` und `:443` reverse-proxyen auf `127.0.0.1:8080` |
+| TLS | Let's Encrypt via acme.sh, `/etc/ssl/nova/{fullchain,key}.pem`, Auto-Renewal-Cron |
 | WebSocket | `ProxyPass /gateway ws://127.0.0.1:8080/gateway` (mod_proxy_wstunnel) |
 | Database | PostgreSQL 17, database/user `nova`, password in `/etc/nova/nova.env` |
 | Uploads | `/var/lib/nova/uploads` |
 | Backups | `/usr/local/bin/nova-backup`, cron 03:30, `/var/backups/nova`, 7 days |
-| Firewall | ufw active; every port listening at enable time allowed, DB ports removed |
+| Firewall | ufw active; TCP 22/80/443/8443, UDP 40000–40100 erlaubt; DB-Ports entfernt |
 | Brute force | fail2ban sshd jail (5 failures / 10 min → 1 h ban) |
 | SSH | key-only; `PermitRootLogin prohibit-password`, `PasswordAuthentication no` |
 
@@ -23,7 +26,7 @@ Live endpoint: **http://85.215.175.202** (HTTP only, no domain/TLS yet).
 
 ```ini
 NOVA_BIND_ADDR=0.0.0.0:8080
-NOVA_PUBLIC_ORIGIN=http://85.215.175.202
+NOVA_PUBLIC_ORIGIN=https://85-215-175-202.sslip.io
 NOVA_TRUST_PROXY=true
 NOVA_HASH_CONCURRENCY=1
 NOVA_LISTEN_BACKLOG=4096
@@ -51,20 +54,49 @@ systemctl restart nova
 `nova update` verifies the SHA-256 asset before swapping the release symlink.
 The service restart is done by root because the updater does not elevate itself.
 
-## Apache overrides (Plesk may regenerate `server.conf`)
+## Apache / TLS (eigene vHost-Datei)
 
-Plesk owns `/etc/apache2/plesk.conf.d/server.conf`. The install appended these
-directives to the `85.215.175.202:80` vhost and kept
-`server.conf.nova.bak`. After a Plesk reconfiguration, check the vhost and
-re-add them if `/` stops returning the Nova UI:
+Die Nova-vHosts liegen in `/etc/apache2/conf-available/nova-ssl.conf` und werden
+über `a2enconf nova-ssl` geladen. Sie sind bewusst **IP-spezifisch**
+(`85.215.175.202:80` und `:443`), weil Plesks IP-vHost sonst jeden Host-Header
+abfängt:
 
 ```apache
-ProxyPreserveHost On
-ProxyPass /gateway ws://127.0.0.1:8080/gateway
-ProxyPassReverse /gateway ws://127.0.0.1:8080/gateway
-ProxyPass / http://127.0.0.1:8080/
-ProxyPassReverse / http://127.0.0.1:8080/
+<VirtualHost 85.215.175.202:80>
+    ServerName 85-215-175-202.sslip.io
+    Alias /.well-known/acme-challenge/ /var/www/nova-acme/.well-known/acme-challenge/
+    ProxyPass /.well-known/acme-challenge/ !
+    ProxyPass /gateway ws://127.0.0.1:8080/gateway
+    ProxyPassReverse /gateway ws://127.0.0.1:8080/gateway
+    ProxyPass / http://127.0.0.1:8080/
+    ProxyPassReverse / http://127.0.0.1:8080/
+</VirtualHost>
+
+<VirtualHost 85.215.175.202:443>
+    ServerName 85-215-175-202.sslip.io
+    SSLEngine on
+    SSLCertificateFile /etc/ssl/nova/fullchain.pem
+    SSLCertificateKeyFile /etc/ssl/nova/key.pem
+    ProxyPass /gateway ws://127.0.0.1:8080/gateway
+    ProxyPassReverse /gateway ws://127.0.0.1:8080/gateway
+    ProxyPass / http://127.0.0.1:8080/
+    ProxyPassReverse / http://127.0.0.1:8080/
+</VirtualHost>
 ```
+
+Zertifikat erneuern (acme.sh-Cron erledigt das automatisch):
+
+```bash
+~/.acme.sh/acme.sh --cron
+~/.acme.sh/acme.sh --install-cert -d 85-215-175-202.sslip.io \
+  --key-file /etc/ssl/nova/key.pem \
+  --fullchain-file /etc/ssl/nova/fullchain.pem \
+  --reloadcmd "systemctl reload apache2"
+```
+
+Plesk besitzt weiterhin `/etc/apache2/plesk.conf.d/server.conf` und den Panel-Port
+8443. Die Nova-Konfiguration ist davon getrennt; nach einem Plesk-Update prüfen,
+ob `a2enconf nova-ssl` noch aktiv ist.
 
 Worker limit (`/etc/apache2/mods-available/mpm_event.conf`, restart Apache):
 `ServerLimit 12`, `ThreadLimit 256`, `ThreadsPerChild 128`,
@@ -90,9 +122,9 @@ Messung dokumentiert.
 
 ## Known limitations
 
-- No TLS and no domain yet: Plesk owns 80/443 and there is no DNS name. Add a
-  Plesk domain + Let's Encrypt certificate, then move the proxy to that vhost
-  and set `NOVA_PUBLIC_ORIGIN=https://…`.
+- **IONOS-Cloud-Firewall blockiert UDP 40000–40100 von außen.** ufw ist offen
+  und das Zertifikat ist gültig, aber ohne UDP-Freigabe im IONOS-Panel kann
+  kein ICE-Kandidat bestätigt werden; Voice/Screenshare verbinden dann nicht.
 - Presence is not fanned out on connect/disconnect (it was O(n²)); online
   status comes from the guild member list, profile updates still broadcast.
 - Single node only. The resume ring and rate limits are in-process, so a second

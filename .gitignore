@@ -13,3 +13,4 @@
 
 /desktop/src-tauri/target/
 /desktop/node_modules/
+/release/
