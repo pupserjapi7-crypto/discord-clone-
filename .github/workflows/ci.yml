@@ -39,18 +39,25 @@ jobs:
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # rust-embed needs web/build to exist for clippy/test too.
+      - name: Build frontend
+        working-directory: web
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build
+
       - name: Apply schema (sqlx compile-time checks)
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f crates/db/migrations/0001_init.sql
 
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-
-      - name: Build frontend
-        working-directory: web
-        run: |
-          npm ci --legacy-peer-deps
-          npm run build
 
       - name: Build release binary (musl)
         run: cargo build --release --target x86_64-unknown-linux-musl -p nova -p nova-loadtest

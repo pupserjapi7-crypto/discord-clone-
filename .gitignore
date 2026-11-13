@@ -3,7 +3,7 @@
 /node_modules
 /web/node_modules
 /web/build/*
-!/web/build/.gitkeep
+!/web/build/index.html
 /web/.svelte-kit
 /web/test-results
 /web/playwright-report

@@ -38,6 +38,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend (rust-embed input)
+        working-directory: web
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build
+
       - name: Apply schema (sqlx compile-time checks)
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f crates/db/migrations/0001_init.sql
 
