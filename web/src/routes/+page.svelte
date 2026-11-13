@@ -12,9 +12,13 @@
   let status = $state<'connecting' | 'online' | 'offline'>('offline');
   let error = $state('');
   let draft = $state('');
-  let handle = $state('load0000');
-  let password = $state('loadtest-password');
+  let handle = $state('');
+  let password = $state('');
   let registerMode = $state(false);
+  let guildName = $state('');
+  let inviteInput = $state('');
+  let inviteCode = $state('');
+  let showOnboarding = $state(false);
 
   let gateway: Gateway | null = null;
   let nonce = 0;
@@ -32,6 +36,53 @@
   async function boot() {
     guilds = await api<GuildSummary[]>('/api/v1/guilds');
     if (guilds[0]) await openGuild(guilds[0].id);
+  }
+
+  async function createGuild(event: SubmitEvent) {
+    event.preventDefault();
+    if (!guildName.trim()) return;
+    error = '';
+    try {
+      await api('/api/v1/guilds', {
+        method: 'POST',
+        body: JSON.stringify({ name: guildName.trim() })
+      });
+      guildName = '';
+      showOnboarding = false;
+      await boot();
+      connect();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function joinGuild(event: SubmitEvent) {
+    event.preventDefault();
+    const code = inviteInput.trim();
+    if (!code) return;
+    error = '';
+    try {
+      await api(`/api/v1/invites/${encodeURIComponent(code)}`, { method: 'POST' });
+      inviteInput = '';
+      showOnboarding = false;
+      await boot();
+      connect();
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  async function createInvite() {
+    if (!detail) return;
+    error = '';
+    try {
+      const result = await api<{ code: string }>(`/api/v1/guilds/${detail.guild.id}/invites`, {
+        method: 'POST'
+      });
+      inviteCode = result.code;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
   }
 
   async function openGuild(id: string) {
@@ -150,9 +201,7 @@
       >
         {registerMode ? 'Ich habe schon ein Konto' : 'Neues Konto erstellen'}
       </button>
-      <p class="mt-4 text-xs text-ink3">
-        Erster Start? <code>nova seed</code> legt Testkonten an. Registrierung: POST /api/v1/auth/register
-      </p>
+
     </form>
   </main>
 {:else}
@@ -165,6 +214,12 @@
           title={guild.name}
         >{guild.name.slice(0, 2).toUpperCase()}</button>
       {/each}
+      <button
+        class="grid h-11 w-11 place-items-center rounded-card border border-dashed border-line text-lg text-ink3 transition-colors duration-150 hover:text-ink"
+        onclick={() => (showOnboarding = !showOnboarding)}
+        title="Server erstellen oder beitreten"
+        aria-label="Server erstellen oder beitreten"
+      >+</button>
     </nav>
 
     <aside class="flex w-60 flex-col border-r border-line bg-surface">
@@ -172,6 +227,36 @@
         <p class="text-sm font-semibold">{detail?.guild.name ?? 'Nova'}</p>
         <p class="text-xs text-ink3">{status === 'online' ? 'verbunden' : status}</p>
       </header>
+      {#if showOnboarding || guilds.length === 0}
+        <div class="space-y-4 border-b border-line p-3">
+          <form onsubmit={createGuild}>
+            <label class="block text-xs uppercase tracking-wide text-ink3" for="guild-name">Server erstellen</label>
+            <div class="mt-1 flex gap-2">
+              <input
+                id="guild-name"
+                bind:value={guildName}
+                class="min-w-0 flex-1 rounded-card border border-line bg-surface2 px-2 py-1.5 text-sm outline-none"
+                placeholder="Mein Server"
+                aria-label="Servername"
+              />
+              <button class="rounded-card bg-accent px-2 py-1.5 text-sm font-medium text-white" type="submit">Erstellen</button>
+            </div>
+          </form>
+          <form onsubmit={joinGuild}>
+            <label class="block text-xs uppercase tracking-wide text-ink3" for="invite-input">Einladung</label>
+            <div class="mt-1 flex gap-2">
+              <input
+                id="invite-input"
+                bind:value={inviteInput}
+                class="min-w-0 flex-1 rounded-card border border-line bg-surface2 px-2 py-1.5 text-sm outline-none"
+                placeholder="Code"
+                aria-label="Einladungscode"
+              />
+              <button class="rounded-card border border-line px-2 py-1.5 text-sm" type="submit">Beitreten</button>
+            </div>
+          </form>
+        </div>
+      {/if}
       <ul class="flex-1 overflow-y-auto p-2">
         {#each detail?.channels ?? [] as item (item.id)}
           <li>
@@ -196,7 +281,15 @@
           <h2 class="text-sm font-semibold">{channel ? `# ${channel.name}` : 'Kanal wählen'}</h2>
           <p class="text-xs text-ink3">{channel?.topic ?? 'Kein Thema gesetzt'}</p>
         </div>
-        {#if error}<span class="text-xs" style="color: var(--nx-danger)">{error}</span>{/if}
+        <div class="flex items-center gap-3">
+          {#if inviteCode}
+            <code class="rounded-card border border-line px-2 py-1 text-xs" data-testid="invite-code">{inviteCode}</code>
+          {/if}
+          {#if detail}
+            <button class="text-xs text-ink3 hover:text-ink" onclick={createInvite}>Einladen</button>
+          {/if}
+          {#if error}<span class="text-xs" style="color: var(--nx-danger)">{error}</span>{/if}
+        </div>
       </header>
 
       <ol class="flex-1 space-y-3 overflow-y-auto px-4 py-4" role="log" aria-live="polite">
