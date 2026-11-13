@@ -65,7 +65,11 @@ jobs:
       - name: Security audit
         run: |
           cargo install cargo-audit --locked
-          cargo audit
+          # Both advisories belong to optional sqlx drivers that are not enabled:
+          # rsa -> sqlx-mysql, libsqlite3-sys -> sqlx-sqlite. Neither crate is in
+          # the build graph (`cargo tree -i <crate>` is empty). Re-check on every
+          # sqlx upgrade; all other advisories still fail the build.
+          cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0459
 
       - uses: actions/upload-artifact@v4
         with:
