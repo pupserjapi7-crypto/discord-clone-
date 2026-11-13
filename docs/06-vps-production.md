@@ -7,7 +7,7 @@ Live endpoint: **http://85.215.175.202** (HTTP only, no domain/TLS yet).
 | Part | Value |
 | --- | --- |
 | Host | Debian 13, 2 vCPU, 1.841 MB RAM, Plesk Obsidian 18.0.82.2 |
-| Nova binary | `/opt/nova/current/nova` → `/opt/nova/releases/v0.1.2/nova` |
+| Nova binary | `/opt/nova/current/nova` (currently 0.1.4) |
 | Service | `nova.service`, user `nova`, `MemoryMax=900M` |
 | App listener | `0.0.0.0:8080` (blocked externally; loopback only in practice) |
 | Public entry | Plesk Apache IP vhost `85.215.175.202:80` reverse-proxies to `127.0.0.1:8080` |
@@ -83,7 +83,10 @@ Worker limit (`/etc/apache2/mods-available/mpm_event.conf`, restart Apache):
 | CPU | ~42 s CPU over 6 min uptime including both load tests |
 
 Raw protocol tests are independent of the UI. The Playwright smoke
-(`web/e2e/smoke.spec.ts`) also passes against `NOVA_BASE_URL=http://85.215.175.202`.
+(`web/e2e/smoke.spec.ts`) also passes against `NOVA_BASE_URL=http://85.215.175.202`:
+it registers two accounts, creates a server and an invite in the UI, joins with
+the second account, exchanges messages and survives a network drop with resume.
+It is self-contained, so it also runs against an empty database.
 
 ## Known limitations
 

@@ -23,7 +23,7 @@ test('register, create guild, invite, chat, second client, reconnect', async ({
   await expect(pageA.getByRole('button', { name: 'Logout' })).toBeVisible();
 
   await pageA.getByLabel('Servername').fill(`Smoke ${suffix}`);
-  await pageA.getByRole('button', { name: 'Erstellen' }).click();
+  await pageA.getByRole('button', { name: 'Erstellen', exact: true }).click();
   await expect(pageA.getByText('verbunden')).toBeVisible();
   await expect(pageA.getByRole('log')).toBeVisible();
 
