@@ -1322,7 +1322,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "nova"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1351,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "nova-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "nova-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "nova-db"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "nova-gateway"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "nova-loadtest"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "nova-sfu"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "nova-common",

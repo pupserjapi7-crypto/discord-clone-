@@ -60,6 +60,20 @@ jobs:
   publish:
     needs: checks
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: nova
+          POSTGRES_PASSWORD: nova
+          POSTGRES_DB: nova
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -83,6 +97,10 @@ jobs:
         run: |
           npm ci --legacy-peer-deps
           npm run build
+
+      # sqlx macros resolve against a live schema at compile time.
+      - name: Apply schema (sqlx compile-time checks)
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f crates/db/migrations/0001_init.sql
 
       - name: Build release binaries
         env:
