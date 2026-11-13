@@ -7,10 +7,12 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: process.env.NOVA_BASE_URL ?? 'http://localhost:5173',
     trace: 'retain-on-failure'
   },
-  webServer: {
+  webServer: process.env.NOVA_BASE_URL
+    ? undefined
+    : {
     command: 'npm run dev -- --port 5173 --strictPort',
     url: 'http://localhost:5173',
     reuseExistingServer: true,

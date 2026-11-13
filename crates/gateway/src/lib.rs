@@ -395,17 +395,10 @@ impl Gateway {
                     heartbeat_secs: 30,
                 };
                 self.send_to(&tx, OP_HELLO_OK, 0, &hello);
-                for guild_id in guild_ids {
-                    self.dispatch_guild(
-                        guild_id,
-                        &Event::PresenceUpdate {
-                            guild_id,
-                            user_id: user.id,
-                            status: user.status,
-                        },
-                        Some(&session.id),
-                    );
-                }
+                // No presence fan-out on connect: with 1.000 concurrent clients
+                // that is O(n²) and triggers backpressure on every storm.
+                // Presence changes are broadcast on explicit profile updates;
+                // initial status comes from the guild member list.
                 Some(session)
             }
         };
@@ -425,17 +418,6 @@ impl Gateway {
         *lock(&session.tx) = None;
         *lock(&session.overflow) = None;
         self.drop_subscriptions(&session);
-        for guild_id in &session.guild_ids {
-            self.dispatch_guild(
-                *guild_id,
-                &Event::PresenceUpdate {
-                    guild_id: *guild_id,
-                    user_id: session.user.id,
-                    status: 0,
-                },
-                None,
-            );
-        }
         debug!(session = %session.id, "gateway session disconnected");
     }
 
