@@ -2,14 +2,14 @@
 
 Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erfahrenen Rust-Entwickler** inklusive Tests und Doku. Jeder Meilenstein endet mit Code, Tests, Messung und kurzem Entscheidungsprotokoll. Kein Meilenstein beginnt, bevor der vorherige sein Gate bestanden hat.
 
-## Umsetzungsstand v0.2.0 (Rust-only)
+## Umsetzungsstand v0.2.2 (Rust-only)
 
 | Meilenstein | Stand |
 |---|---|
 | **M0 Architektur/UI** | ✅ Dioxus-0.7-UI in `crates/ui` (Web-WASM + Tauri-Shell), `web/` entfernt, Docs auf Rust-only umgestellt |
 | **M1 Gateway/Auth/Text** | ✅ implementiert, getestet, auf dem VPS live; 1.000 WS ohne Fehler, p99 3,3 ms |
 | **M2 Voice** | ✅ eigener str0m-SFU, ICE/DTLS im Zwei-Client-Test verbunden; UDP-Freigabe des Providers und HTTPS bleiben Betriebsvoraussetzungen |
-| **M3 UI** | ✅ Auth, Guilds, Kanäle, Chat, Invites, Voice-Dock, Mute, Screenshare-UI |
+| **M3 UI** | ✅ Clean-Design (Dark/Light, Tokens), Mitgliederpanel, Command Palette, gruppierte Nachrichten, Voice-Dock mit Mute/Deafen/Screenshare; unread/ping offen |
 | **M4 Screenshare/1080p60** | ✅ Video-Pfad mit synthetischem 1920×1080@60-Track und zwei Teilnehmern verifiziert; Threads/Moderation/Bot-API noch offen |
 | **M5 optional** | ⏳ nicht begonnen (bewusst nach Ressourcenmessung) |
 
@@ -82,7 +82,7 @@ Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erf
 
 ## M3 — Finale UI, Command Palette, Suche, Uploads · 10–14 Tage
 
-- Design-Tokens, drei Themes, Layout (Desktop/Tablet/Mobile), alle Komponenten aus `02-design.md`.
+- Design-Tokens, Dark/Light, Layout (Desktop/Tablet/Mobile), alle Komponenten aus `02-design.md`.
 - Virtualisierte Nachrichtenliste, Optimistic UI mit Nonce→ID-Ersetzung, Skeleton, Empty States.
 - Command Palette (`Ctrl+K`): Server, Kanäle, Nutzer, Aktionen, Recent-Sprungliste, Fuzzy-Match im Speicher.
 - Suche mit Filter-Chips und Sprung zur Trefferstelle.

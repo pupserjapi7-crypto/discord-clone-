@@ -4,15 +4,15 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 
 **Prioritäten:** Voice-Latenz → Performance/Ressourcen → Design/UX → Features → Sicherheit (immer Pflicht).
 
-## Status v0.2.1
+## Status v0.2.2
 
 | Phase | Zustand |
 |---|---|
 | M0: Architektur + Rust-only-UI | **fertig** — Dioxus 0.7 (Web-WASM + Tauri-Shell), kein Node/npm |
 | M1: Gateway + Auth + Text-Chat | **live** auf `https://85-215-175-202.sslip.io`; 1.000 WS ohne Fehler, Dispatch-p99 3,3 ms |
 | M2: Voice (str0m-SFU) | **implementiert** — ICE/DTLS im Zwei-Client-Test verbunden |
-| M3: UI | **implementiert** — Auth, Guilds, Kanäle, Chat, Invites, Voice-Dock, Mute, Screenshare-UI |
-| M4: Screenshare 1080p60 | **Video-Pfad verifiziert** (1920×1080@60 synthetisch, zwei Teilnehmer); Threads/Moderation/Bot-API offen |
+| M3: UI | **implementiert** — neues Clean-Design (Dark/Light), Mitgliederpanel, Command Palette, gruppierte Nachrichten, Voice-Dock mit Mute/Deafen/Screenshare |
+| M4: Screenshare 1080p60 | **Code + synthetischer Video-Pfad verifiziert**; echte Display-Aufnahme im Automationsbrowser nicht testbar, Threads/Moderation/Bot-API offen |
 | M5: optionale Features | nicht begonnen |
 
 ## Dokumentation
@@ -20,6 +20,8 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 - [`docs/01-architecture.md`](docs/01-architecture.md) — Topologie, Protokoll, RAM-/Bandbreiten-Budget, Build-Pipeline, Deployment
 - [`docs/02-design.md`](docs/02-design.md) — Farben, Typografie, Layout, Komponenten, Frontend-Budget
 - [`docs/03-roadmap.md`](docs/03-roadmap.md) — Meilensteine, Gates, Umsetzungsstand
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — getroffene Architektur- und Designentscheidungen
+- [`STATUS.md`](STATUS.md) — was fertig ist, was fehlt, bekannte Probleme
 - [`docs/06-vps-production.md`](docs/06-vps-production.md) — Betrieb auf dem VPS
 - [`docs/07-desktop-app.md`](docs/07-desktop-app.md) — Tauri-Shell und Installer
 

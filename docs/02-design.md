@@ -1,156 +1,155 @@
 # Project Nova — Designsprache
 
-**Kurzfassung:** eigenständig, nicht Discord. Ruhige dunkle Flächen, eine einzige kräftige Akzentfarbe, Glas nur für schwebende Ebenen, großzügiger Weißraum, Typografie statt Trennlinien. Alles in Tokens, damit die Themes-Engine (Feature 6) später nur Variablen tauscht.
+**Status:** umgesetzt in `crates/ui/assets/app.css` und `crates/ui/src/main.rs` (v0.2.2).
+Ruhige Flächen, eine Akzentfarbe, Inhalt zuerst. Keine Verläufe, Glows,
+Backdrop-Blur oder dekorativen Schatten.
 
 ---
 
 ## 1. Leitidee
 
-„Weltraum-Instrumententafel“: fast schwarzer Grund, präzise Typografie, ein violett-blaues Signal für Interaktion, Farbe ausschließlich für Bedeutung (Status, Präsenz, Warnung). Keine Verläufe auf Inhaltsflächen, keine Schatten als Dekoration, keine bunten Server-Icons als Standard.
+Nova ist ein Werkzeug, keine Bühne. Die drei Flächen (Server-Leiste, Kanäle,
+Chat) liegen nah beieinander; Struktur entsteht durch dünne Linien und
+Typografie, nicht durch Farbe oder Tiefe. Ein einziges ruhiges Violett-Blau
+markiert Interaktion. Semantische Farben erscheinen nur als Status.
 
-Drei Themes ab Tag 1: **Dark (Default)**, **Light**, **AMOLED**. Alle drei aus demselben Token-Satz.
+Dark Mode ist der Standard. Light Mode folgt automatisch
+`prefers-color-scheme`; es gibt keinen manuellen Theme-Schalter.
 
 ---
 
-## 2. Farb-Tokens
+## 2. Tokens
+
+Alle Werte liegen in `crates/ui/assets/app.css`. Komponenten verwenden
+ausschließlich Variablen, keine Hex-Werte.
 
 ```css
-:root[data-theme="dark"] {
-  --nx-bg:            #0a0b0f;
-  --nx-bg-sunken:     #07080b;
-  --nx-surface:       #14171e;
-  --nx-surface-2:     #1a1e27;
-  --nx-surface-3:     #222733;
-  --nx-line:          #262b36;
-  --nx-line-soft:     rgb(255 255 255 / 0.06);
-  --nx-text:          #e9ecf2;
-  --nx-text-2:        #a6aebf;
-  --nx-text-3:        #6e7688;
-  --nx-accent:        #6c5cff;   /* Flächen, Fokus, aktive Zustände */
-  --nx-accent-text:   #9c90ff;   /* Akzent als Text auf dunklem Grund (AA) */
-  --nx-accent-soft:   rgb(108 92 255 / 0.16);
-  --nx-online:        #34d399;
-  --nx-idle:          #fbbf24;
-  --nx-dnd:           #f87171;
-  --nx-offline:       #6e7688;
-  --nx-danger:        #f4516c;
-  --nx-success:       #2dd4a7;
-  --nx-warn:          #f0a35e;
-  --nx-glass:         rgb(20 23 30 / 0.72);
-  --nx-glass-border:  rgb(255 255 255 / 0.07);
-}
-:root[data-theme="light"] {
-  --nx-bg: #f7f8fb; --nx-surface: #ffffff; --nx-surface-2: #f1f3f8;
-  --nx-line: #e3e6ed; --nx-text: #111318; --nx-text-2: #4b5364; --nx-text-3: #737b8c;
-  --nx-accent: #5646e8; --nx-accent-text: #4a3ad6;
-}
-:root[data-theme="amoled"] {
-  --nx-bg: #000000; --nx-bg-sunken: #000000; --nx-surface: #07090d;
-  --nx-surface-2: #0d1117; --nx-line: #151a21; --nx-glass: rgb(7 9 13 / 0.9);
+:root {
+    --bg-rail: #0f1115;      /* Server-Leiste */
+    --bg-sidebar: #13161c;   /* Kanäle / Mitglieder */
+    --bg-main: #171b22;      /* Chat */
+    --bg-raised: #1d222b;    /* Inputs, Karten, Voice-Dock */
+    --border: rgba(255, 255, 255, 0.07);
+    --text: #e8ebf1;
+    --text-muted: #a0a8b7;
+    --text-faint: #7d8797;
+    --accent: #7b86f8;       /* genau eine Akzentfarbe */
+    --green: #49b98a;
+    --yellow: #d0a44c;
+    --red: #df737d;
+    --gray: #78818f;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
 }
 ```
 
-**Regeln**
+Light Mode überschreibt dieselben Variablen in
+`@media (prefers-color-scheme: light)` (weiße Hauptfläche, dunkle Schrift,
+Akzent `#4f5bd5`).
 
-- Akzent `#6c5cff` hat auf `#14171e` nur ~3,4:1 → **nie** für Fließtext, nur für Flächen, Icons ≥ 24 px, Fokusringe. Text in Akzentfarbe nutzt `--nx-accent-text` (≥ 4,6:1).
-- Statusfarben nur als 8-px-Punkt, 2-px-Ring oder Icon — nie als Flächenfarbe.
-- AMOLED deaktiviert Glas (Banding/Schmieren auf OLED), nutzt solide Flächen.
+Regeln:
+
+- Drei Hintergrundstufen plus `--bg-raised` für interaktive Flächen.
+- Drei Textstufen; Fließtext erreicht WCAG AA auf seiner Fläche.
+- Status nie nur über Farbe: Punkt plus Text/`aria-label`.
+- Kein Hex-Wert und kein `background: linear-gradient(...)` in Komponenten.
+- Fokus: `outline: 2px solid var(--accent)` mit 2 px Offset.
 
 ---
 
 ## 3. Typografie
 
-- **UI/Schrift:** Inter Variable, selbst gehostet, Subset `latin` + `latin-ext` (~48 KB woff2, `font-display: swap`, Preload der einen Datei). Fallback `system-ui, "Segoe UI", sans-serif`.
-- **Code/Mono:** JetBrains Mono, Subset, 400/500, nur für Codeblöcke und Snowflake-IDs (~22 KB, lazy).
-- **Skala (px / line-height):** 11/16 (Meta, Zeitstempel), 13/20 (Sidebar, Sekundär), 14/22 (Chat-Body, Standard), 16/24 (Untertitel), 20/28, 24/32, 30/38 (Seitentitel). Eine Skala, keine Ausnahmen.
-- **Gewichte:** 400 Body, 500 Namen/Buttons, 600 Titel. Kein 700+ (wirkt in Inter schnell grob).
-- **Details:** `letter-spacing: -0.011em` ab 16 px; Zeitstempel `font-variant-numeric: tabular-nums`; Zeilenlänge im Chat max. 72 ch (Lesbarkeit auf Ultrawide).
-- **Deutsch:** keine feste Großschreibung von UI-Labels per CSS, echte Texte (Umlaute, ß). Keine Text-Transformation außer bei Badges.
+- Familie: `Inter` falls lokal installiert, sonst `Segoe UI Variable Text`,
+  `Segoe UI`, `system-ui`. Keine Webfont-Anfrage an fremde Server.
+- Skala: 11 / 12 / 13,5 / 14 / 15 / 19 / 22 / 24 px.
+- Chat 14 px, Zeilenhöhe 1,45; Zeitstempel 10,5–11 px,
+  `font-variant-numeric: tabular-nums`.
+- Gewichte: 400 Regular, 600 Semibold. Keine 700+-Ausnahmen außer Wortmarke.
+- Labels in Großbuchstaben nur für Gruppenüberschriften, nie für Fließtext.
 
 ---
 
-## 4. Raum, Form, Tiefe
-
-| Token | Wert | Verwendung |
-|---|---|---|
-| `--nx-space-1..8` | 4, 8, 12, 16, 24, 32, 48, 64 | alles |
-| `--nx-radius-sm/md/lg/pill` | 8, 12, 18, 999 | Controls / Cards / Panels / Avatare |
-| `--nx-shadow-1` | `0 8px 24px rgb(0 0 0 / .35)` | nur Overlays |
-| `--nx-focus` | `0 0 0 2px var(--nx-bg), 0 0 0 4px var(--nx-accent)` | Tastaturfokus, immer sichtbar |
-| Border | `1px solid var(--nx-line)` | Struktur statt Schatten |
-
-**Glas** ausschließlich für: Command Palette, Modals/Sheets, Voice-Dock, Kontextmenüs. `backdrop-filter: blur(16px) saturate(120%)` + 1-px-Innenkante. Nie für Listen, nie für den Composer (Lesbarkeit).
-
----
-
-## 5. Layout
+## 4. Layout und Abstände
 
 ```
-┌────┬──────────────┬────────────────────────────────┬──────────────┐
-│ 72 │ 260          │ Header (Kanal, Topic, Suche)   │ 240          │
-│ R  │ Server-Header│────────────────────────────────│ Mitglieder   │
-│ a  │ Kategorien   │ Nachrichten (virtualisiert)    │ (toggle)     │
-│ i  │  # kanal     │                                │              │
-│ l  │  # kanal  •3 │                                │              │
-│    │              │────────────────────────────────│              │
-│    │ Voice-Dock   │ Composer                       │              │
-│    │ User-Bar     │                                │              │
-└────┴──────────────┴────────────────────────────────┴──────────────┘
+┌──────┬──────────────┬──────────────────────────────┬──────────────┐
+│ 68   │ 248          │ Chat                          │ 240          │
+│ Rail │ Kanäle       │ Header / Nachrichten / Composer│ Mitglieder   │
+└──────┴──────────────┴──────────────────────────────┴──────────────┘
 ```
 
-- **Desktop ≥ 1280:** 3 Spalten, Memberliste ein-/ausblendbar (merkt sich der Client).
-- **Tablet 768–1279:** Memberliste als Overlay, Server-Rail bleibt.
-- **Mobile < 768:** eine Spalte; Navigation als Bottom-Sheet mit Geste; Voice als kollabierbarer Streifen über dem Composer; Composer `position: sticky` mit `env(safe-area-inset-bottom)`.
-- **Grid:** Sidebar `260px` (resize 220–320), Content `1fr` mit `max-width: 1200px` und Zentrierung, Memberliste `240px`.
-- **Voice-UI:** Kacheln in `auto-fill minmax(180px, 1fr)`; Sprecher-Ring animiert nur `opacity`/`transform` (kein Layout-Shift, keine `box-shadow`-Animation).
-- **Zustaende:** Skeleton in Flächenform (kein Spinner für Listen), leere Zustände mit einer Zeile Erklärung + einer primären Aktion, Fehler mit Retry.
+- 4-px-Raster; Radius 6 / 10 / 16 px.
+- Server-Icons 42 px, rund; aktiv abgerundetes Quadrat plus Marker links.
+- Avatare rund, 32 px im Chat, 26 px in Listen.
+- Mitgliederpanel ab 1024 px sichtbar und per Button umschaltbar; darunter
+  ausgeblendet, damit der Chat lesbar bleibt. (Die ursprüngliche Vorgabe
+  „unter ca. 900 px“ wird bewusst etwas früher gezogen.)
+- Unter 900 px: Rail 64 px, Kanäle 232 px, Mitglieder aus.
+- Unter 700 px: eine Spalte; Kanäle als Drawer mit Scrim, Header mit
+  Menü-Button.
+- Composer bleibt am unteren Rand; Voice-Dock sitzt direkt darüber.
 
 ---
 
-## 6. Komponenten (M3)
+## 5. Komponenten
 
-Buttons (primary/ghost/danger/icon), Input, Textarea mit Autosize und Zeichenzähler, Select, Switch, Avatar mit Status-Dot, Badge/Mention-Pill, Tooltip (150 ms Delay), Message-Row (gruppiert bei gleichem Autor < 7 min), Reply-Quote, Reactions, Attachment-Card mit Thumbnail, Codeblock mit Copy, Channel-Item (mit Unread-Punkt/Badge), Voice-Tile mit Qualitäts-Pill, Toast, Modal/Sheet, Command Palette, Context-Menu, Skeleton, Empty State.
-
-**Zustandsregeln:** Hover nur bei `(hover: hover)`, Fokus immer sichtbar, Active = `scale(.98)` + 1-px-Verschiebung, Disabled = 45 % Opazität und `cursor: not-allowed`, Ladezustand im Button mit fixer Breite (kein Springen).
-
----
-
-## 7. Motion
-
-- Dauer: 120 ms (Mikro), 160 ms (Standard), 200 ms (Overlays). Nichts darüber.
-- Easing: `cubic-bezier(.22,.8,.24,1)` für Ein, `cubic-bezier(.4,0,1,1)` für Aus.
-- Ausschließlich `transform` und `opacity`. Keine Animation von `height`, `top`, `box-shadow`, `filter`.
-- `@media (prefers-reduced-motion: reduce)` → Dauer 1 ms, keine Slides, keine Sprecher-Pulse.
-- Skeletons: Opacity-Puls 1,6 s, nicht bei `reduced-motion`.
-
----
-
-## 8. Barrierefreiheit (WCAG AA)
-
-- Kontrast Text ≥ 4,5:1, große Text/Icons ≥ 3:1 (Tokens oben erfüllen das; wird in M3 mit axe geprüft).
-- Vollständige Tastaturbedienung: `Ctrl/Cmd+K` Palette, `Esc` schließt, `↑/↓` in Listen, `Alt+↑/↓` Kanäle, `Ctrl+Shift+M` Mute, Fokus-Falle in Modals, Fokus-Rückgabe.
-- Screenreader: `aria-live="polite"` für eingehende Nachrichten (gebündelt, nicht pro Nachricht bei Burst), `role="log"` für die Nachrichtenliste, Labels für alle Icon-Buttons, `aria-pressed` für Mute/Deafen.
-- Voice: nie nur Farbe — Sprecher hat Ring **und** `aria-label="spricht"`.
-- Formulare: Label immer sichtbar, Fehlertext per `aria-describedby`, kein Placeholder als Label.
-- `lang="de"` am Dokument, Datumsformate über `Intl`.
-
----
-
-## 9. Performance-Budget (Frontend)
-
-| Posten | Budget |
+| Komponente | Zustände / Verhalten |
 |---|---|
-| WASM + JS-Glue (gzip, Kern-Route) | < 1,5 MB, Ziel 1,0 MB |
-| CSS (gzip) | < 25 KB |
-| Fonts | Systemschriften (0 KB Netzwerk), optional Inter lokal |
-| TTI auf Mid-Range-Mobile (4G) | < 2 s bis interaktiv, Cache-First |
-| Nachrichten-Scroll | 60 fps bei 10.000 Zeilen (Dioxus-Keyed-Liste) |
-| Command Palette öffnen | < 50 ms (kein Netzwerk, Index im Speicher) |
+| Server-Icon | normal, Hover, aktiv mit Marker |
+| Kanalgruppe | offen/geschlossen, `aria-expanded`, Chevron |
+| Kanal | normal, Hover, aktiv, Live-Punkt, Voice-Avatare |
+| Nachricht | normal, gruppiert (gleicher Autor, gleiche Minute), Hover |
+| Composer | leer/gefüllt, Fokus, deaktivierter Senden-Button |
+| Voice-Dock | verbunden/bereit, Mute, Deafen, Screenshare, Verlassen |
+| Mitgliederpanel | Online/Offline, Statuspunkt mit Label, einklappbar |
+| Command Palette | Strg/Cmd+K, Esc, Tippen, Enter, Aktionen |
+| Modals | Fokus, Backdrop, Abbrechen/primäre Aktion |
+| Toast | Fehler mit Schließen-Button |
+| Auth | Login/Registrierung, Busy-Zustand, Fehlertext |
 
-**Mittel:** Dioxus-Web mit `--release` und `wasm-opt`-Profil, Code-Splitting über Dioxus-Routen, Icons als Inline-SVG, keine Runtime-CSS-Bibliothek, `content-visibility: auto` für Offscreen-Kacheln, Bilder mit `loading="lazy"`. Die UI wird als statisches Asset-Bundle in das Server-Binary eingebettet; es gibt **kein** `adapter-static`, kein Node-Bundling und keinen Service Worker. Die verbindliche Messung ist die Größe von `crates/ui/dist` nach `dx build` plus Kompression.
+Icons sind Inline-SVG (`Icon`-Komponente in `main.rs`), keine Icon-Fonts und
+keine externen Assets.
 
 ---
 
-## 10. Themes-Engine (Feature 6)
+## 6. Bewegung
 
-Themes sind JSON mit Token-Overrides (`--nx-accent`, `--nx-bg`, …), validiert gegen eine Allowlist (nur `--nx-*`, nur Farb-/Längenwerte), angewendet über `document.documentElement.style.setProperty`. Kein `innerHTML`, kein freies CSS von Nutzern (XSS/Exfiltrationsrisiko). Live-Vorschau zeigt Chat-Ausschnitt + Voice-Tile in einem 200 ms-Umschaltzyklus. Mitgeliefert: Dark, Light, AMOLED, „Nebula“ (Magenta-Akzent), „Forest“ (Grün-Akzent), „Paper“ (warmes Hell).
+- 150 ms, `ease-out`; nur Hintergrund, Farbe, Transform und Opazität.
+- Kein Scroll- oder Voice-Animationseffekt.
+- `@media (prefers-reduced-motion: reduce)` setzt Übergänge und Animationen
+  auf 0,01 ms.
+
+---
+
+## 7. Barrierefreiheit
+
+- Vollständige Tab-Reihenfolge, sichtbarer Fokusring, Mindesthöhe 32 px.
+- `Ctrl/Cmd+K` öffnet die Palette global; `Esc` schließt sie.
+- Icon-Buttons haben `aria-label`; Mute/Deafen/Screenshare nutzen
+  `aria-pressed`.
+- Nachrichtenliste ist `role="log"` mit `aria-live="polite"`.
+- Status wird als Punkt **und** Text (`Online`/`Offline`) ausgegeben.
+- Farbe ist nie der einzige Bedeutungsträger.
+
+---
+
+## 8. Budget
+
+| Posten | Ziel |
+|---|---|
+| WASM (unkomprimiert) | < 1 MB; aktuell ca. 763 KB |
+| Handgeschriebenes CSS | eine Datei, ca. 25 KB |
+| Externe Requests | 0 (keine Fonts/CDNs) |
+| Handgeschriebenes JS | 0 |
+| Interaktion | sofort; Palette arbeitet rein im Speicher |
+
+---
+
+## 9. Bekannte Design-Lücken
+
+- Ungelesen-Badges und Reply-/Reaktionsdarstellung sind noch nicht an die
+  vorhandenen Daten angebunden.
+- Ein echter Ping-Wert wird im Voice-Dock noch nicht angezeigt.
+- Die Sprecher-Hervorhebung nutzt noch keinen Audiopegel; sie ist für einen
+  späteren RTP-Level-Ausbau vorbereitet.

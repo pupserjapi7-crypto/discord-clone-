@@ -121,6 +121,7 @@ pub struct SessionState {
     pub voice_participants: Vec<VoiceParticipant>,
     pub voice_joined: bool,
     pub muted: bool,
+    pub deafened: bool,
     pub screen: bool,
 }
 

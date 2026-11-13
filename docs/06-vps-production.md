@@ -9,7 +9,7 @@ Voice genutzt.
 | Part | Value |
 | --- | --- |
 | Host | Debian 13, 2 vCPU, 1.841 MB RAM, Plesk Obsidian 18.0.82.2 |
-| Nova binary | `/opt/nova/current/nova` (currently 0.2.1) |
+| Nova binary | `/opt/nova/current/nova` (currently 0.2.2) |
 | Service | `nova.service`, user `nova`, `MemoryMax=900M` |
 | App listener | `0.0.0.0:8080` (blocked externally; loopback only in practice) |
 | Public entry | Apache-vHosts `85.215.175.202:80` und `:443` reverse-proxyen auf `127.0.0.1:8080` |

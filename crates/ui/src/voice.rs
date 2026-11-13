@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use js_sys::Reflect;
 use wasm_bindgen::{JsCast, JsValue};
@@ -15,6 +15,7 @@ thread_local! {
     static SESSION: RefCell<Option<VoiceSession>> = const { RefCell::new(None) };
     static REMOTE: RefCell<Vec<HtmlElement>> = const { RefCell::new(Vec::new()) };
     static SCREEN: RefCell<Option<MediaStream>> = const { RefCell::new(None) };
+    static DEAFENED: Cell<bool> = const { Cell::new(false) };
 }
 
 struct VoiceSession {
@@ -199,6 +200,7 @@ fn attach_remote(event: RtcTrackEvent) {
     let _ = element.set_attribute("data-nova-voice", "1");
     let media = element.clone().unchecked_into::<HtmlMediaElement>();
     media.set_autoplay(true);
+    media.set_muted(DEAFENED.with(Cell::get));
     if is_video {
         let video = element.clone().unchecked_into::<HtmlVideoElement>();
         let _ = video.set_attribute("playsinline", "true");
@@ -379,6 +381,18 @@ pub fn stop_screen() {
     });
 }
 
+/// Schaltet alle bereits empfangenen Tonspuren stumm. Neue Tracks erben den
+/// Zustand in `attach_remote`, ohne dass die PeerConnection neu verhandelt wird.
+pub fn set_deafened(deafened: bool) {
+    DEAFENED.with(|state| state.set(deafened));
+    REMOTE.with(|remote| {
+        for element in remote.borrow().iter() {
+            let media = element.clone().unchecked_into::<HtmlMediaElement>();
+            media.set_muted(deafened);
+        }
+    });
+}
+
 pub fn set_muted(muted: bool) {
     SESSION.with(|session| {
         if let Some(session) = session.borrow().as_ref() {
@@ -389,6 +403,7 @@ pub fn set_muted(muted: bool) {
 
 pub fn shutdown() {
     stop_screen();
+    set_deafened(false);
     SESSION.with(|session| {
         if let Some(session) = session.borrow_mut().take() {
             let tracks = session.local.get_tracks();
