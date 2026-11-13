@@ -15,6 +15,7 @@ hex.workspace = true
 nova-common = { path = "../common" }
 nova-db = { path = "../db" }
 nova-gateway = { path = "../gateway" }
+nova-sfu = { path = "../voice-sfu" }
 rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true

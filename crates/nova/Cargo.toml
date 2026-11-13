@@ -19,6 +19,7 @@ nova-api = { path = "../api" }
 nova-common = { path = "../common" }
 nova-db = { path = "../db" }
 nova-gateway = { path = "../gateway" }
+nova-sfu = { path = "../voice-sfu" }
 rand.workspace = true
 reqwest.workspace = true
 rust-embed.workspace = true

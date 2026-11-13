@@ -25,6 +25,7 @@ use nova_api::{AppState, state::RateLimiter};
 use nova_common::{config::Config, ids::Snowflake, metrics::Metrics, tokens::TokenStore};
 use nova_db::Db;
 use nova_gateway::Gateway;
+use nova_sfu::Sfu;
 use rust_embed::RustEmbed;
 use serde_json::json;
 use socket2::{Domain, Protocol, Socket, Type};
@@ -39,7 +40,7 @@ mod update;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(RustEmbed)]
-#[folder = "../../web/build/"]
+#[folder = "../../crates/ui/dist/"]
 struct Assets;
 
 #[derive(Parser)]
@@ -145,6 +146,7 @@ async fn serve(role: &str) -> Result<()> {
     gateway.spawn_janitor();
 
     let limiter = Arc::new(RateLimiter::new());
+    let sfu = Arc::new(Sfu::from_env());
     let state = AppState {
         db,
         cfg: Arc::clone(&cfg),
@@ -152,6 +154,7 @@ async fn serve(role: &str) -> Result<()> {
         metrics,
         ids,
         gateway: Arc::clone(&gateway),
+        sfu,
         started: Instant::now(),
         auth_limiter: Arc::clone(&limiter),
         hash_limit: Arc::new(Semaphore::new(cfg.hash_concurrency)),
@@ -254,7 +257,7 @@ async fn static_asset(uri: Uri) -> Response {
         Some(file) => asset_response("index.html", file.data.into_owned()),
         None => (
             StatusCode::NOT_FOUND,
-            "frontend not built: run `npm run build` in web/",
+            "frontend not built: run `dx build --platform web --release --features web` in crates/ui",
         )
             .into_response(),
     }
@@ -282,6 +285,7 @@ fn content_type(path: &str) -> &'static str {
         "html" => "text/html; charset=utf-8",
         "js" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",
+        "wasm" => "application/wasm",
         "json" => "application/json",
         "svg" => "image/svg+xml",
         "png" => "image/png",

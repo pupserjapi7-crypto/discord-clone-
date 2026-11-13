@@ -2,12 +2,23 @@
 
 Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erfahrenen Rust-Entwickler** inklusive Tests und Doku. Jeder Meilenstein endet mit Code, Tests, Messung und kurzem Entscheidungsprotokoll. Kein Meilenstein beginnt, bevor der vorherige sein Gate bestanden hat.
 
+## Umsetzungsstand v0.2.0 (Rust-only)
+
+| Meilenstein | Stand |
+|---|---|
+| **M0 Architektur/UI** | ✅ Dioxus-0.7-UI in `crates/ui` (Web-WASM + Tauri-Shell), `web/` entfernt, Docs auf Rust-only umgestellt |
+| **M1 Gateway/Auth/Text** | ✅ implementiert, getestet, auf dem VPS live; 1.000 WS ohne Fehler, p99 3,3 ms |
+| **M2 Voice** | ✅ eigener str0m-SFU, ICE/DTLS im Zwei-Client-Test verbunden; UDP-Freigabe des Providers und HTTPS bleiben Betriebsvoraussetzungen |
+| **M3 UI** | ✅ Auth, Guilds, Kanäle, Chat, Invites, Voice-Dock, Mute, Screenshare-UI |
+| **M4 Screenshare/1080p60** | ✅ Video-Pfad mit synthetischem 1920×1080@60-Track und zwei Teilnehmern verifiziert; Threads/Moderation/Bot-API noch offen |
+| **M5 optional** | ⏳ nicht begonnen (bewusst nach Ressourcenmessung) |
+
 ---
 
-## M0 — Schritt 1: Architektur (dieser Stand)
+## M0 — Architektur und Rust-only-Frontend (abgeschlossen)
 
-**Lieferung:** `docs/01-architecture.md`, `docs/02-design.md`, `docs/03-roadmap.md`, README.
-**Gate:** dein OK zu den fünf offenen Punkten in Kapitel 22 der Architektur.
+**Lieferung:** `docs/01-architecture.md`, `docs/02-design.md`, `docs/03-roadmap.md`, `crates/ui`, Tauri-Shell.
+**Gate:** erfüllt — eine UI-Codebasis, Web-Build über `dx`, Einbettung ins Server-Binary, kein Node/npm.
 
 ---
 
@@ -39,7 +50,7 @@ Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erf
 | Fehlerrate unter Last | < 0,1 % |
 | RSS gesamt (ohne SFU) | < 700 MB |
 | `cargo clippy -- -D warnings`, Tests | grün, keine `unwrap()` im Prod-Pfad |
-| Frontend-Build | Kern-Route < 200 KB gzip |
+| Frontend-Build | WASM+Glue < 1,5 MB gzip |
 
 **Artefakt:** `docs/benchmarks/m1-gateway.md` mit Rohwerten und CPU/RAM-Verlauf.
 
@@ -81,7 +92,7 @@ Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erf
 - A11y-Pass: Tastatur, Fokus, `aria-live`, axe-Scan, Kontrastprüfung.
 - Performance-Pass: Bundle-Analyse, Code-Splitting, Font-Subset, TTI-Messung.
 
-**Gate:** Lighthouse Performance ≥ 90 (Desktop) / ≥ 80 (Mobile-Throttle), Kern-Route < 200 KB gzip, Tastaturbedienung vollständig, axe ohne kritische Findings.
+**Gate:** Dioxus-Web-Build < 1,5 MB gzip, Tastaturbedienung vollständig, axe ohne kritische Findings, Screenshare-UI auf einem echten Chrome/Edge mit Display-Capture getestet.
 
 ---
 

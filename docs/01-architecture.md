@@ -1,8 +1,10 @@
 # Project Nova — Architektur (Schritt 1)
 
-**Status:** Entwurf, wartet auf Freigabe. In diesem Schritt wurde **kein Produktivcode** geschrieben.
-**Zielumgebung:** 1 VPS, 2 vCore, 2 GB RAM, 90 GB NVMe, Ubuntu 24.04 LTS, SSH-Key-Login.
+**Status:** umgesetzt als **v0.2.0** (Rust-only). Server, Gateway, SFU, Web-UI und Desktop-Shell liegen in einem Cargo-Workspace.
+**Zielumgebung:** 1 VPS, 2 vCore, 2 GB RAM, 90 GB NVMe, Ubuntu 24.04 LTS, SSH-Key-Login (live: `85.215.175.202`).
 **Sprache im Repo:** Code/Kommentare/Identifier Englisch, Dokumentation und UI-Texte Deutsch (i18n-fähig vorbereitet).
+
+> **Planungsstand vs. Umsetzung:** Die Kapitel zu Caddy, drei systemd-Units und Zero-Downtime beschreiben das ursprüngliche Zielbild. Ausgeliefert wird aktuell **ein Binary** (`nova serve`) hinter Apache/Plesk auf Port 8080, mit PostgreSQL 17, systemd und einer Unit. Abweichungen sind in Kapitel 15.1 dokumentiert.
 
 ---
 
@@ -40,7 +42,7 @@ Nicht verhandelbar: **kein Redis, kein Meilisearch, kein MinIO, kein Prometheus/
 | Passwörter | **Argon2id** (m=19 MiB, t=2, p=1) | Standard, speicherhart; 19 MiB ist auf 2 GB vertretbar | ~40 ms CPU pro Login |
 | Voice | **eigener SFU auf `str0m` 0.25 (sans-IO, ICE-lite)** | Kein Async/Lock im Medienpfad, ein Thread pro Kern, exakte Kontrolle über Latenz und Layer-Auswahl | ~110 MB RSS, 1 Kern unter Last |
 | SFU-Fallback | **LiveKit selbst gehostet** (Entscheidungstor in M2) | Spart Wochen; kostet Go-Runtime, weniger Kontrolle | ~80–150 MB RSS |
-| Frontend | **SvelteKit + TS + Tailwind, `adapter-static`**, Assets im Binary | Kleinster echter Bundle für diese UI-Klasse, kein WASM-Startup, riesiges Ökosystem für Virtualisierung/A11y | ~90 KB gzip Shell |
+| Frontend | **Dioxus 0.7 (RSX) → Web-WASM**, `dx build`; Assets im Binary | Eine Rust-UI für Web und Desktop, Typprüfung gegen das Protokoll, kein zweiter JS-Toolchain-Stack | ~1,0–1,5 MB gzip WASM+Glue |
 | Assets | **rust-embed** im Release, Verzeichnis im Dev | Single-Binary-Anforderung erfüllt | +~2 MB Binary |
 | Allocator | **mimalloc** | Weniger Fragmentierung bei vielen kurzlebigen Frames | +~1–3 % Durchsatz |
 | Reverse Proxy | **Caddy** (HTTP/3, Brotli, automatisches TLS) | Null Konfigurationsaufwand für TLS/H2/H3, weniger RAM als nginx+Certbot-Gespann | ~40 MB RSS |
@@ -48,9 +50,11 @@ Nicht verhandelbar: **kein Redis, kein Meilisearch, kein MinIO, kein Prometheus/
 | Metriken | **`/metrics` (Prometheus-Textformat) nur auf Loopback** | Erfüllt „Messbarkeit“ ohne TSDB-Stack | < 1 MB |
 | Deployment | **1 Binary, 3 systemd-Units** (`nova-api`, `nova-gateway`, `nova-sfu`), CI-Build, rsync + Symlink-Tausch | Prozessisolation ohne Container; SFU-Neustart killt keine Chat-Sessions | 0 zusätzliche MB |
 
-### Frontend: SvelteKit vs. Leptos/Dioxus
+### Frontend: Dioxus 0.7 statt SvelteKit
 
-**Gewählt: SvelteKit.** Begründung in drei Sätzen: (a) Die UI ist listen- und textlastig; Svelte liefert dafür den kleinsten Runtime-Overhead ohne WASM-Start (~90 KB gzip Shell vs. realistisch 300–500 KB WASM+Glue bei Leptos/Dioxus inkl. Hydration). (b) Virtualisierte Nachrichtenlisten, IndexedDB-Cache, WebRTC-APIs und Screenreader-Korrekturen sind im JS-Ökosystem gereift; in Rust-WASM kostet jedes davon eigene Bindings. (c) Der Rust-Anteil bleibt dort, wo er zählt: Gateway, Fan-out, SFU. Full-Rust wäre eine ästhetische, keine technische Entscheidung — und würde M3 um mehrere Wochen verschieben.
+**Gewählt: Dioxus 0.7 (RSX) für Web-WASM und Desktop.** Eine Codebasis in `crates/ui` rendert per `dx build --web --release --features web` nach WASM; `crates/nova` bettet `crates/ui/dist` per `rust-embed` ein. Die Tauri-2-Shell (`desktop/src-tauri`) lädt dieselbe öffentliche URL. WebRTC, Mikrofon und Bildschirmfreigabe laufen direkt über `web-sys`/`wasm-bindgen`; es gibt **kein** Node/npm, kein SvelteKit, kein Tailwind. Handgeschrieben sind nur `assets/app.css` und die HTML-Hülle.
+
+**Kosten der Entscheidung:** WASM+Glue sind größer als eine JS-Shell (Budget in `02-design.md`), und jede Browser-API braucht ein `web-sys`-Binding. Dafür gibt es genau einen UI-Codebaum, Typprüfung zwischen UI und Protokoll und keinen zweiten Toolchain-Stack auf dem Build-Server.
 
 ### Warum kein Redis (und was es ersetzt)
 
@@ -69,7 +73,7 @@ Nicht verhandelbar: **kein Redis, kein Meilisearch, kein MinIO, kein Prometheus/
 ```mermaid
 flowchart TB
   subgraph CL["Clients"]
-    WEB["Browser / PWA<br/>SvelteKit"]
+    WEB["Browser<br/>Dioxus WASM"]
     DESK["Tauri Desktop<br/>später"]
     LOAD["loadtest<br/>Rust"]
   end
@@ -268,15 +272,16 @@ discord clone/                      # Pfad enthält Leerzeichen → Skripte quot
 │   │   └── src/                    # Config, Fehler, Zeit
 │   ├── db/                         # sqlx-Modelle, Repos, migrations/
 │   │   └── migrations/
-│   ├── api/                        # Axum-Router, Auth, Uploads, Suche, Link-Previews
+│   ├── api/                        # Axum-Router, Auth, Uploads, Voice-Routen
 │   ├── gateway/                    # Sessions, Fan-out, Presence, Resume, Rate-Limits
 │   ├── voice-sfu/                  # str0m-Sessions, Rooms, RTP-Routing, TWCC
+│   ├── ui/                         # Dioxus-0.7-App (RSX) für Web und Desktop
+│   │   ├── src/                    # main, api, gateway, voice, protocol
+│   │   ├── assets/app.css          # handgeschriebenes Design
+│   │   └── dist/                   # dx-Build, in das Server-Binary eingebettet
 │   ├── loadtest/                   # WS- und Voice-Lasttest, Report-Generator
 │   └── nova/                       # das Binary: clap-Subcommands, rust-embed, /metrics
-├── web/                            # SvelteKit + TS + Tailwind
-│   ├── src/routes/                 # /, /login, /app/[guild]/[channel]
-│   ├── src/lib/                    # components, stores, gateway-client, voice, cache
-│   └── build/                      # adapter-static Output → in Binary eingebettet
+├── desktop/src-tauri/               # Tauri-2-Shell, lädt die öffentliche Nova-URL
 └── deploy/
     ├── caddy/Caddyfile
     ├── systemd/nova-{api,gateway,sfu}.service
@@ -446,6 +451,27 @@ Connection-Pools: api 6, gateway 4, sfu 0. `idle_in_transaction_session_timeout 
 
 ## 15. Deployment
 
+### 15.1 Rust-only Build-Pipeline und Voraussetzungen
+
+**Lokal (Windows oder Linux):** Rust 1.89+ (Toolchain-Datei), `wasm32-unknown-unknown`, Dioxus-CLI 0.7 (`cargo install dioxus-cli --version 0.7.0`), `pkg-config`/`libssl` nur für optionale Tauri-Builds. **Kein** Node, npm, pnpm oder Bun ist am Build beteiligt.
+
+```bash
+# Web-UI (erzeugt crates/ui/dist, wird vom Server eingebettet)
+cd crates/ui && dx build --web --release --features web
+cp dist/../assets/app.css dist/assets/app.css
+
+# Server + Tests
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p nova-ui --target wasm32-unknown-unknown --features web -- -D warnings
+cargo test --workspace
+cargo build --release -p nova
+```
+
+**CI:** `.github/workflows/release.yml` baut bei einem Tag `v*` in dieser Reihenfolge: Dioxus-Web-Build → Clippy → Tests → Linux-`x86_64-unknown-linux-musl`-Binary (`.tar.gz`) → Windows-Tauri-Bundles (NSIS `.exe`, MSI) → Linux `.deb` und `.AppImage`. Die Windows-Bundles laufen auf `windows-latest` mit MSVC und WebView2; lokal auf einem GNU-Host ist das MSI nicht reproduzierbar.
+
+**Deployment auf dem VPS:** Apache/Plesk terminiert HTTP auf Port 80 und proxyt auf `127.0.0.1:8080`; systemd-Unit `nova.service` startet `nova serve`. PostgreSQL 17 läuft lokal. UDP 40000–40100 muss in der Provider-Firewall zusätzlich zu 22/80/443 offen sein, sonst bleibt Voice im Browser bei ICE `checking` stehen.
+
 **Build:** GitHub Actions, `x86_64-unknown-linux-musl`, mimalloc → statisches Binary ~18–28 MB (mit eingebettetem Frontend). Kein Kompilieren auf dem VPS. Release-Profil: `opt-level=3`, `lto="fat"`, `codegen-units=1`, `strip=true`, `panic="abort"`. `target-cpu=x86-64-v2` (nicht `native`, sonst crasht das Binary auf anderer VPS-CPU).
 
 **Null-Downtime-Tausch:** `deploy.sh` lädt nach `/opt/nova/releases/<timestamp>/nova`, startet die neue API/Gateway-Instanz auf 8082/8083, wartet auf `/readyz`, schaltet Caddy-Upstream per Admin-API um, SIGTERM an die alte Instanz mit 60 s Drain (WS-Clients erhalten `RECONNECT`, resümieren auf die neue Instanz), Symlink `current` umziehen. **SFU wird nicht mitgetauscht**, solange Calls laufen (separater Deploy-Schritt, Maintenance-Fenster).
@@ -501,7 +527,7 @@ EnvironmentFile=/etc/nova/nova.env
 | Fläche | Maßnahme |
 |---|---|
 | SQL | ausschließlich Prepared Statements / sqlx-Bindings, keine String-Konkatenation |
-| XSS | Markdown-Renderer mit Allowlist, kein `innerHTML` außer durch Sanitizer; CSP `default-src 'self'`, kein `unsafe-eval`; `style-src 'self'` (Tailwind-CSS-Datei), Theme-Variablen über CSSOM statt Inline-Style |
+| XSS | Markdown-Renderer mit Allowlist, kein `innerHTML` außer durch Sanitizer; CSP `default-src 'self'`, kein `unsafe-eval`; `style-src 'self'` (`app.css`), Theme-Variablen über CSSOM statt Inline-Style |
 | CSRF | Bearer-Token-API + Origin-Check am Refresh-Endpoint |
 | CORS | nur eigener Origin; `Access-Control-Allow-Credentials` nur für `/auth/*` |
 | Uploads | Größen-/MIME-Limits, Re-Encoding, kein SVG, Zufallsnamen, `Content-Disposition: attachment` für Nicht-Bilder, `X-Content-Type-Options: nosniff` |

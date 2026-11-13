@@ -140,14 +140,14 @@ Buttons (primary/ghost/danger/icon), Input, Textarea mit Autosize und Zeichenzä
 
 | Posten | Budget |
 |---|---|
-| JS Kern-Route (gzip) | < 200 KB, Ziel 150 KB |
+| WASM + JS-Glue (gzip, Kern-Route) | < 1,5 MB, Ziel 1,0 MB |
 | CSS (gzip) | < 25 KB |
-| Fonts | 48 KB (Inter) + 22 KB (Mono, lazy) |
-| TTI auf Mid-Range-Mobile (4G) | < 1 s bis interaktiv mit Cache-First-Render |
-| Nachrichten-Scroll | 60 fps bei 10.000 Zeilen im virtuellen Fenster |
+| Fonts | Systemschriften (0 KB Netzwerk), optional Inter lokal |
+| TTI auf Mid-Range-Mobile (4G) | < 2 s bis interaktiv, Cache-First |
+| Nachrichten-Scroll | 60 fps bei 10.000 Zeilen (Dioxus-Keyed-Liste) |
 | Command Palette öffnen | < 50 ms (kein Netzwerk, Index im Speicher) |
 
-**Mittel:** `adapter-static`, Route-Splitting, Icons als Inline-SVG-Sprite (nur genutzte Icons), Virtualizer selbst (~120 Zeilen, kein Fremd-Paket), IndexedDB-Cache rendert vor dem ersten Netzwerk-Roundtrip, Bilder mit `loading="lazy"`, `content-visibility: auto` für Offscreen-Kacheln, kein Runtime-CSS, kein Polyfill-Bundle (nur moderne Browser).
+**Mittel:** Dioxus-Web mit `--release` und `wasm-opt`-Profil, Code-Splitting über Dioxus-Routen, Icons als Inline-SVG, keine Runtime-CSS-Bibliothek, `content-visibility: auto` für Offscreen-Kacheln, Bilder mit `loading="lazy"`. Die UI wird als statisches Asset-Bundle in das Server-Binary eingebettet; es gibt **kein** `adapter-static`, kein Node-Bundling und keinen Service Worker. Die verbindliche Messung ist die Größe von `crates/ui/dist` nach `dx build` plus Kompression.
 
 ---
 

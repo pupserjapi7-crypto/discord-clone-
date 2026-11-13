@@ -26,13 +26,15 @@ build time (override with `NOVA_DESKTOP_URL`).
 
 ## Build locally (Windows, MSVC toolchain)
 
+Die Tauri-CLI wird als Rust-Binary installiert; es wird **kein npm** benötigt.
+
 ```powershell
-npm install --global @tauri-apps/cli@^2
+cargo install tauri-cli --version "^2"
 cd desktop
-tauri build --bundles nsis
+cargo tauri build --bundles nsis,msi
 ```
 
-Output: `desktop/src-tauri/target/release/bundle/nsis/Nova_0.1.5_x64-setup.exe`.
+Output: `desktop/src-tauri/target/release/bundle/nsis/Nova_0.2.0_x64-setup.exe` und `bundle/msi/Nova_0.2.0_x64_en-US.msi`.
 The GitHub release workflow builds this automatically on `windows-latest` and
 attaches the installer to the release tag.
 

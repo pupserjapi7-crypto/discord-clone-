@@ -12,6 +12,7 @@ use dashmap::DashMap;
 use nova_common::{config::Config, ids::Snowflake, metrics::Metrics, tokens::TokenStore};
 use nova_db::Db;
 use nova_gateway::Gateway;
+use nova_sfu::Sfu;
 use tokio::sync::Semaphore;
 
 use crate::error::ApiError;
@@ -24,6 +25,7 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub ids: Arc<Snowflake>,
     pub gateway: Arc<Gateway>,
+    pub sfu: Arc<Sfu>,
     pub started: Instant,
     pub auth_limiter: Arc<RateLimiter>,
     /// Bounds concurrent Argon2 work: hashing is memory-hard and must never

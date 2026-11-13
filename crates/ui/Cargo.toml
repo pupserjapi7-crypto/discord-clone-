@@ -1,0 +1,62 @@
+[package]
+name = "nova-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+dioxus = { version = "0.7", features = [] }
+futures-channel = "0.3"
+futures-util = { version = "0.3", features = ["async-await", "sink"] }
+gloo-net = { version = "0.6", features = ["http", "websocket"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+js-sys = "0.3"
+rmp-serde.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "console",
+  "Document",
+  "Element",
+  "Event",
+  "EventTarget",
+  "MessageEvent",
+  "HtmlElement",
+  "HtmlMediaElement",
+  "HtmlAudioElement",
+  "HtmlVideoElement",
+  "Location",
+  "DisplayMediaStreamConstraints",
+  "MediaDevices",
+  "MediaStream",
+  "MediaStreamConstraints",
+  "MediaStreamTrack",
+  "MediaTrackConstraints",
+  "Node",
+  "Navigator",
+  "RtcConfiguration",
+  "RtcIceCandidate",
+  "RtcIceCandidateInit",
+  "RtcDataChannel",
+  "RtcDataChannelEvent",
+  "RtcIceGatheringState",
+  "RtcPeerConnection",
+  "RtcRtpSender",
+  "RtcSdpType",
+  "RtcPeerConnectionIceEvent",
+  "RtcSessionDescription",
+  "RtcSessionDescriptionInit",
+  "RtcTrackEvent",
+  "Window",
+] }
+
+[dev-dependencies]
+nova-common = { path = "../common" }
+
+[features]
+default = []
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]

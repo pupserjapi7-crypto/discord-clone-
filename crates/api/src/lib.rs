@@ -64,6 +64,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/guilds/{guild_id}/invites", post(create_invite))
         .route("/api/v1/invites/{code}", post(join_invite))
         .route("/api/v1/channels/{channel_id}/messages", get(list_messages))
+        .route("/api/v1/channels/{channel_id}/voice/join", post(voice_join))
+        .route(
+            "/api/v1/channels/{channel_id}/voice/leave",
+            post(voice_leave),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/voice/participants",
+            get(voice_participants),
+        )
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics))
@@ -742,6 +751,115 @@ async fn list_messages(
         .collect();
 
     Ok(json_ids(&views))
+}
+
+// ---------------------------------------------------------------------------
+// Voice signaling
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct VoiceJoinRequest {
+    sdp: String,
+}
+
+#[derive(Debug, Serialize)]
+struct VoiceParticipantView {
+    user_id: i64,
+    handle: String,
+    display_name: String,
+    muted: bool,
+    screen: bool,
+}
+
+async fn voice_channel(
+    state: &AppState,
+    user_id: i64,
+    channel_id: i64,
+) -> ApiResult<nova_db::models::Channel> {
+    let Some(channel) = state.db.channel(channel_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    if !state.db.is_member(channel.guild_id, user_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    let perms = state
+        .db
+        .effective_permissions(channel.guild_id, user_id, Some(channel_id))
+        .await?;
+    if !perms.contains(Permissions::VIEW_CHANNEL) {
+        return Err(ApiError::NotFound);
+    }
+    Ok(channel)
+}
+
+async fn voice_join(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(channel_id): Path<i64>,
+    Json(req): Json<VoiceJoinRequest>,
+) -> ApiResult<Json<Value>> {
+    let channel = voice_channel(&state, auth.user_id, channel_id).await?;
+    if channel.kind != 1 {
+        return Err(ApiError::BadRequest(
+            "channel is not a voice channel".into(),
+        ));
+    }
+    if req.sdp.len() > 64 * 1024 {
+        return Err(ApiError::TooLarge);
+    }
+    let user = state
+        .db
+        .user_by_id(auth.user_id)
+        .await?
+        .ok_or(ApiError::Unauthorized)?;
+    let public = views::user_public(&state.cfg.public_origin, &user);
+    let answer = state
+        .sfu
+        .join(channel_id, &public, &req.sdp)
+        .map_err(|err| match err {
+            nova_sfu::VoiceError::Full => ApiError::Conflict("voice channel is full".into()),
+            nova_sfu::VoiceError::Disabled => {
+                ApiError::BadRequest("voice is disabled on this server".into())
+            }
+            nova_sfu::VoiceError::InvalidOffer(reason) => {
+                ApiError::BadRequest(format!("invalid SDP: {reason}"))
+            }
+            nova_sfu::VoiceError::Unavailable => {
+                ApiError::Internal(anyhow::anyhow!("SFU unavailable"))
+            }
+        })?;
+    Ok(Json(json!({ "sdp": answer })))
+}
+
+async fn voice_leave(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(channel_id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    voice_channel(&state, auth.user_id, channel_id).await?;
+    state.sfu.leave(channel_id, auth.user_id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn voice_participants(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(channel_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    voice_channel(&state, auth.user_id, channel_id).await?;
+    let participants: Vec<VoiceParticipantView> = state
+        .sfu
+        .participants(channel_id)
+        .into_iter()
+        .map(|participant| VoiceParticipantView {
+            user_id: participant.user_id,
+            handle: participant.handle,
+            display_name: participant.display_name,
+            muted: participant.muted,
+            screen: participant.screen,
+        })
+        .collect();
+    Ok(json_ids(&participants))
 }
 
 // ---------------------------------------------------------------------------

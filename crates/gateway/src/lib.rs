@@ -299,19 +299,26 @@ impl Gateway {
 
         let first = match tokio::time::timeout(Duration::from_secs(10), stream.next()).await {
             Ok(Some(Ok(Message::Binary(bytes)))) => bytes,
-            _ => return,
+            other => {
+                warn!(?other, "gateway closed before the hello frame");
+                return;
+            }
         };
         let Ok(frame) = protocol::decode(&first) else {
+            warn!(len = first.len(), "gateway hello frame decode failed");
             return;
         };
         if frame.op != OP_HELLO {
+            warn!(op = frame.op, "gateway first frame was not hello");
             return;
         }
         let Ok(ClientOp::Hello { token, resume }) = protocol::decode_body::<ClientOp>(frame.body)
         else {
+            warn!("gateway hello payload decode failed");
             return;
         };
         let Some(access) = self.tokens.validate(&token) else {
+            warn!("gateway hello token rejected");
             self.send_to(
                 &tx,
                 OP_INVALID_SESSION,

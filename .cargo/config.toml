@@ -1,3 +1,8 @@
 [target.x86_64-unknown-linux-musl]
 # CI installs musl-tools; production builds are static musl binaries.
 linker = "musl-gcc"
+
+[target.wasm32-unknown-unknown]
+# Dioxus/dx setzt dieses cfg ebenfalls; ohne das Flag bricht getrandom beim
+# direkten cargo-Check fuer wasm32 ab.
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

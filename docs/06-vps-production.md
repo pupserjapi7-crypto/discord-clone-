@@ -82,11 +82,11 @@ Worker limit (`/etc/apache2/mods-available/mpm_event.conf`, restart Apache):
 | RSS after load | 228 MB peak, ~60 MB idle |
 | CPU | ~42 s CPU over 6 min uptime including both load tests |
 
-Raw protocol tests are independent of the UI. The Playwright smoke
-(`web/e2e/smoke.spec.ts`) also passes against `NOVA_BASE_URL=http://85.215.175.202`:
-it registers two accounts, creates a server and an invite in the UI, joins with
-the second account, exchanges messages and survives a network drop with resume.
-It is self-contained, so it also runs against an empty database.
+Raw protocol tests are independent of the UI. Die frühere Playwright-Suite
+(`web/e2e/smoke.spec.ts`) wurde mit dem SvelteKit-Frontend entfernt. Der
+Rust-UI-Smoke läuft lokal gegen `http://127.0.0.1:8080` (Registrierung, Guild,
+Kanal, Nachricht) und ist in `docs/benchmarks/m1-gateway.md` als historische
+Messung dokumentiert.
 
 ## Known limitations
 

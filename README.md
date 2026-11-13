@@ -1,42 +1,85 @@
 # Project Nova
 
-Ein schlanker, latenzoptimierter Discord-Clone in Rust — gebaut für **einen** VPS mit 2 vCore / 2 GB RAM / 90 GB NVMe.
+Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für **einen** VPS mit 2 vCore / 2 GB RAM / 90 GB NVMe.
 
 **Prioritäten:** Voice-Latenz → Performance/Ressourcen → Design/UX → Features → Sicherheit (immer Pflicht).
 
-## Status
+## Status v0.2.0
 
 | Phase | Zustand |
 |---|---|
-| Schritt 1: Architektur, RAM-Budget, Roadmap, Designsprache | **fertig — wartet auf Freigabe** |
-| M1: Gateway + Auth + Text-Chat | nicht begonnen |
-| M2: Voice-Prototyp (str0m, Latenz-Gate) | nicht begonnen |
-| M3: Finale UI, Command Palette, Suche, Uploads | nicht begonnen |
-| M4: Screenshare, Threads, Moderation, Bot-API | nicht begonnen |
-| M5: optionale Features (nur nach Messung) | nicht begonnen |
-
-Es existiert **noch kein Produktivcode**. Dieses Repository enthält derzeit ausschließlich die Entscheidungsgrundlage.
+| M0: Architektur + Rust-only-UI | **fertig** — Dioxus 0.7 (Web-WASM + Tauri-Shell), kein Node/npm |
+| M1: Gateway + Auth + Text-Chat | **live** auf `http://85.215.175.202`; 1.000 WS ohne Fehler, Dispatch-p99 3,3 ms |
+| M2: Voice (str0m-SFU) | **implementiert** — ICE/DTLS im Zwei-Client-Test verbunden |
+| M3: UI | **implementiert** — Auth, Guilds, Kanäle, Chat, Invites, Voice-Dock, Mute, Screenshare-UI |
+| M4: Screenshare 1080p60 | **Video-Pfad verifiziert** (1920×1080@60 synthetisch, zwei Teilnehmer); Threads/Moderation/Bot-API offen |
+| M5: optionale Features | nicht begonnen |
 
 ## Dokumentation
 
-- [`docs/01-architecture.md`](docs/01-architecture.md) — Topologie, Prozessmodell, Protokoll, RAM-/Bandbreiten-Budget, Deployment, Sicherheit, LiveKit-Alternative
-- [`docs/02-design.md`](docs/02-design.md) — Farben, Typografie, Layout, Komponenten, Motion, A11y, Frontend-Budget
-- [`docs/03-roadmap.md`](docs/03-roadmap.md) — Meilensteine, messbare Gates, Risiken
+- [`docs/01-architecture.md`](docs/01-architecture.md) — Topologie, Protokoll, RAM-/Bandbreiten-Budget, Build-Pipeline, Deployment
+- [`docs/02-design.md`](docs/02-design.md) — Farben, Typografie, Layout, Komponenten, Frontend-Budget
+- [`docs/03-roadmap.md`](docs/03-roadmap.md) — Meilensteine, Gates, Umsetzungsstand
+- [`docs/06-vps-production.md`](docs/06-vps-production.md) — Betrieb auf dem VPS
+- [`docs/07-desktop-app.md`](docs/07-desktop-app.md) — Tauri-Shell und Installer
 
-## Kurzfassung der Architektur
+## Architektur in Kürze
 
-- **Ein Binary, drei systemd-Units:** `nova-api` (Axum), `nova-gateway` (WebSocket, binär/MessagePack), `nova-sfu` (str0m, ICE-lite, UDP 40000–40100).
-- **PostgreSQL 17** für alles Persistente inkl. Volltextsuche (`tsvector` + GIN). Kein Redis, kein Meilisearch, kein MinIO, kein Docker auf dem Server.
-- **Presence, Sessions, Rate-Limits** im Prozess (`DashMap`), **Uploads** content-addressed im Dateisystem hinter einer `BlobStore`-Abstraktion.
-- **Frontend:** SvelteKit + TypeScript + Tailwind, statisch gebaut und ins Binary eingebettet.
-- **Voice:** eigener SFU ohne Mixing/Transcoding, 48 kHz Opus, 20-ms-Frames, adaptiver Jitter-Buffer, 1080p60-Screenshare (8–10 Mbit/s, Simulcast, Cap 8). Fallback auf LiveKit ist als Entscheidungstor in M2 definiert.
+- **Ein Binary:** `nova serve` startet Axum-HTTP, Gateway und SFU; Optionen über `/etc/nova/nova.env`.
+- **PostgreSQL 17** für alles Persistente inkl. Volltextsuche (`tsvector` + GIN). Kein Redis, kein Meilisearch, kein MinIO, kein Docker.
+- **Presence, Sessions, Rate-Limits** im Prozess; **Uploads** content-addressed hinter `BlobStore`.
+- **Frontend:** Dioxus 0.7 (RSX), `dx build --web` → WASM, per `rust-embed` im Server-Binary. Dieselbe UI läuft in der Tauri-2-Desktop-Shell.
+- **Voice:** eigener str0m-SFU, ICE-lite, UDP 40000–40100, Opus 48 kHz/20 ms, RTP-Fanout ohne Mixing/Transcoding; Screenshare als 1080p60-Schicht.
 
-## Voraussetzungen (lokale Entwicklung)
+## Voraussetzungen
 
-Auf diesem Rechner vorhanden: Node 26 / npm 12. **Fehlt noch:** Rust-Toolchain (≥ 1.89, str0m-MSRV) und PostgreSQL 17. Beides wird zu Beginn von M1 installiert; der Server-Build läuft ohnehin in CI (`x86_64-unknown-linux-musl`).
+- Rust **1.89+** (siehe `rust-toolchain.toml`), Target `wasm32-unknown-unknown`
+- Dioxus-CLI **0.7.0**: `cargo install dioxus-cli --version 0.7.0`
+- PostgreSQL 17 für lokale Entwicklung
+- Für Tauri-Installer: MSVC/WebView2 (Windows) bzw. WebKitGTK (Linux)
+- **Kein** Node, npm, pnpm oder Bun
 
-Geplant: `cargo test`, `cargo clippy -- -D warnings`, `cargo sqlx prepare` (mit lokaler DB), `npm run dev` in `web/`.
+## Bauen
 
-## Nächster Schritt
+```bash
+# 1. Web-UI (erzeugt crates/ui/dist)
+cd crates/ui
+dx build --web --release --features web
+cd ../..
+rm -rf crates/ui/dist
+mkdir -p crates/ui/dist
+cp -a target/dx/nova-ui/release/web/public/. crates/ui/dist/
+cp crates/ui/assets/app.css crates/ui/dist/assets/app.css
 
-Freigabe von Schritt 1 (offene Punkte in [`docs/01-architecture.md`](docs/01-architecture.md#22-offene-punkte-für-dein-ok)), danach Start von M1.
+# 2. Server (Debug lokal, Release für Deployment)
+cargo build -p nova
+cargo build --release --target x86_64-unknown-linux-musl -p nova
+
+# 3. Prüfungen
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy -p nova-ui --target wasm32-unknown-unknown --features web -- -D warnings
+cargo test --workspace
+```
+
+Der Server bettet `crates/ui/dist` ein; nach UI-Änderungen muss `crates/nova/src/main.rs` neu kompiliert werden (`touch` hilft gegen den `rust-embed`-Cache).
+
+## Desktop-Installer
+
+```powershell
+cargo install tauri-cli --version "^2"
+cd desktop
+cargo tauri build --bundles nsis,msi
+```
+
+Ergebnis: `desktop/src-tauri/target/release/bundle/nsis/*.exe` und `bundle/msi/*.msi`. Linux: `--bundles deb,appimage`. Die CI baut alle Pakete bei einem Tag `v*` über `.github/workflows/release.yml`.
+
+## Lokal starten
+
+```bash
+cp .env.example .env            # Werte anpassen
+cargo run -p nova -- migrate
+cargo run -p nova -- serve
+```
+
+Standard: `http://127.0.0.1:8080`. Voice im Browser benötigt einen **Secure Context** (HTTPS oder `localhost`) und erreichbare **UDP-Ports 40000–40100**.
