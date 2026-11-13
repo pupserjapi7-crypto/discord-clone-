@@ -199,13 +199,18 @@ async fn login_burst(args: &Arc<Args>) -> Result<()> {
 }
 
 async fn run_load(args: &Arc<Args>) -> Result<()> {
-    let (count, senders) = match args.mode {
-        Mode::Receivers => (args.receivers.unwrap_or(args.users), false),
-        _ => (args.senders.unwrap_or(args.users), true),
+    let (senders, receivers) = match args.mode {
+        Mode::Receivers => (0, args.receivers.unwrap_or(args.users)),
+        Mode::Senders => (
+            args.senders.unwrap_or(args.users),
+            args.receivers.unwrap_or(0),
+        ),
+        Mode::Login | Mode::Slow => (args.senders.unwrap_or(args.users), 0),
     };
+    let count = senders + receivers;
     println!(
-        "loadtest: mode={:?} clients={} step={}s channel={} rate={}/s",
-        args.mode, count, args.duration, args.channel, args.msg_rate
+        "loadtest: mode={:?} clients={} senders={} receivers={} step={}s channel={} rate={}/s",
+        args.mode, count, senders, receivers, args.duration, args.channel, args.msg_rate
     );
     let logins = login_all(args, count).await?;
     let run_started = Instant::now();
@@ -213,8 +218,9 @@ async fn run_load(args: &Arc<Args>) -> Result<()> {
     for (slot, (token, _)) in logins.into_iter().enumerate() {
         let args = Arc::clone(args);
         let index = args.offset + slot;
+        let is_sender = slot < senders;
         tasks.push(tokio::spawn(async move {
-            run_peer(args, token, index, senders).await
+            run_peer(args, token, index, is_sender).await
         }));
     }
 
