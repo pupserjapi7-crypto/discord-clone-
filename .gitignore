@@ -10,3 +10,6 @@
 .env
 *.log
 .DS_Store
+
+/desktop/src-tauri/target/
+/desktop/node_modules/

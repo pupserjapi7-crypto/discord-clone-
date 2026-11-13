@@ -1,0 +1,19 @@
+[package]
+name = "nova-desktop"
+version = "0.1.5"
+description = "Nova desktop client"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
