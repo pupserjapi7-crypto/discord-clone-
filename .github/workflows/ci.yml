@@ -49,7 +49,7 @@ jobs:
       - name: Build frontend
         working-directory: web
         run: |
-          npm ci
+          npm ci --legacy-peer-deps
           npm run build
 
       - name: Build release binary (musl)
