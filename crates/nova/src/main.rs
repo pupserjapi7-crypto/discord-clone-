@@ -32,6 +32,8 @@ use tokio::sync::Semaphore;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+mod update;
+
 #[cfg(not(target_os = "windows"))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -67,6 +69,18 @@ enum Command {
     },
     /// Print configuration and connectivity diagnostics.
     Doctor,
+    /// Update this binary from the latest GitHub release.
+    Update {
+        /// Only report whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+        /// Repository in `owner/name` form.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Do not restart the systemd unit after replacing the binary.
+        #[arg(long)]
+        no_restart: bool,
+    },
 }
 
 #[tokio::main]
@@ -88,6 +102,11 @@ async fn main() -> Result<()> {
             password,
         } => seed(users, &guild, &password).await,
         Command::Doctor => doctor().await,
+        Command::Update {
+            check,
+            repo,
+            no_restart,
+        } => update::run(check, repo, no_restart).await,
     }
 }
 

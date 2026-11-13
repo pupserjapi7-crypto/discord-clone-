@@ -20,7 +20,10 @@ nova-common = { path = "../common" }
 nova-db = { path = "../db" }
 nova-gateway = { path = "../gateway" }
 rand.workspace = true
+reqwest.workspace = true
 rust-embed.workspace = true
+serde.workspace = true
+sha2.workspace = true
 serde_json.workspace = true
 socket2.workspace = true
 sqlx.workspace = true

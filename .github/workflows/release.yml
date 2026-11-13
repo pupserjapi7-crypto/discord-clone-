@@ -1,0 +1,57 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build release binaries
+        env:
+          NOVA_UPDATE_REPO: ${{ github.repository }}
+        run: cargo build --release --target x86_64-unknown-linux-musl -p nova -p nova-loadtest
+
+      - name: Package assets
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/nova dist/nova-linux-x86_64
+          cp target/x86_64-unknown-linux-musl/release/nova-loadtest dist/nova-loadtest-linux-x86_64
+          cd dist
+          sha256sum nova-linux-x86_64 > nova-linux-x86_64.sha256
+          sha256sum nova-loadtest-linux-x86_64 > nova-loadtest-linux-x86_64.sha256
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
