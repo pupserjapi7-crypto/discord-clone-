@@ -489,7 +489,7 @@ async fn create_guild(
     State(state): State<AppState>,
     auth: Auth,
     Json(req): Json<CreateGuildRequest>,
-) -> ApiResult<(StatusCode, Json<Guild>)> {
+) -> ApiResult<(StatusCode, Json<Value>)> {
     validate::validate_guild_name(&req.name).map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
     let guild = state
         .db
@@ -502,7 +502,7 @@ async fn create_guild(
             state.ids.next_id(),
         )
         .await?;
-    Ok((StatusCode::CREATED, Json(guild)))
+    Ok((StatusCode::CREATED, json_ids(&guild)))
 }
 
 #[derive(Debug, Serialize)]
@@ -599,7 +599,7 @@ async fn create_channel(
     auth: Auth,
     Path(guild_id): Path<i64>,
     Json(req): Json<CreateChannelRequest>,
-) -> ApiResult<(StatusCode, Json<Channel>)> {
+) -> ApiResult<(StatusCode, Json<Value>)> {
     validate::validate_channel_name(&req.name)
         .map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
     if req.kind != 0 && req.kind != 1 {
@@ -628,7 +628,7 @@ async fn create_channel(
             None,
         )
         .await?;
-    Ok((StatusCode::CREATED, Json(channel)))
+    Ok((StatusCode::CREATED, json_ids(&channel)))
 }
 
 #[derive(Debug, Serialize)]
@@ -668,9 +668,9 @@ async fn join_invite(
     State(state): State<AppState>,
     auth: Auth,
     Path(code): Path<String>,
-) -> ApiResult<Json<JoinResponse>> {
+) -> ApiResult<Json<Value>> {
     match state.db.accept_invite(&code, auth.user_id).await? {
-        Some(guild_id) => Ok(Json(JoinResponse { guild_id })),
+        Some(guild_id) => Ok(json_ids(&JoinResponse { guild_id })),
         None => Err(ApiError::NotFound),
     }
 }
