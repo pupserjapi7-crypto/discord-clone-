@@ -1,0 +1,25 @@
+# Project Nova — Caddyfile
+# TLS, HTTP/2 and HTTP/3 are automatic. Voice media never passes through here.
+nova.example.com {
+	encode zstd br gzip
+
+	# WebSocket gateway and REST API.
+	reverse_proxy 127.0.0.1:8080 {
+		health_uri /healthz
+		health_interval 10s
+	}
+
+	# Static assets embedded in the binary are served by the app itself.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy same-origin
+		Permissions-Policy "camera=(), microphone=(self), geolocation=()"
+	}
+}
+
+# Local development (no TLS).
+:8081 {
+	reverse_proxy 127.0.0.1:8080
+}

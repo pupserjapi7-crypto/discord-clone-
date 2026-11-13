@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --nx-bg: #0a0b0f;
+  --nx-surface: #14171e;
+  --nx-surface-2: #1a1e27;
+  --nx-line: #262b36;
+  --nx-text: #e9ecf2;
+  --nx-text-2: #a6aebf;
+  --nx-text-3: #6e7688;
+  --nx-accent: #6c5cff;
+  --nx-accent-text: #9c90ff;
+  --nx-accent-soft: rgb(108 92 255 / 0.16);
+  --nx-online: #34d399;
+  --nx-danger: #f4516c;
+}
+
+:root[data-theme='light'] {
+  --nx-bg: #f7f8fb;
+  --nx-surface: #ffffff;
+  --nx-surface-2: #f1f3f8;
+  --nx-line: #e3e6ed;
+  --nx-text: #111318;
+  --nx-text-2: #4b5364;
+  --nx-text-3: #737b8c;
+  --nx-accent: #5646e8;
+  --nx-accent-text: #4a3ad6;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--nx-bg);
+  color: var(--nx-text);
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--nx-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}

@@ -1,0 +1,12 @@
+/target
+/.dev
+/node_modules
+/web/node_modules
+/web/build/*
+!/web/build/.gitkeep
+/web/.svelte-kit
+/web/test-results
+/web/playwright-report
+.env
+*.log
+.DS_Store
