@@ -1,0 +1,38 @@
+[package]
+name = "nova-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Nativer Nova-Desktop-Client (iced/wgpu, ohne WebView)"
+
+[[bin]]
+name = "nova-desktop"
+path = "src/main.rs"
+
+[dependencies]
+nova-common = { path = "../common" }
+chrono.workspace = true
+futures-util = { workspace = true, features = ["sink"] }
+# CPU-Renderer (tiny-skia) statt wgpu: gemessen ~32 MB statt 130–200 MB RAM
+# und keine 250–500 ms GPU-Initialisierung beim Start. `--features gpu`
+# schaltet wgpu wieder zu (sinnvoll erst für Video/Screenshare).
+iced = { version = "0.14", default-features = false, features = [
+  "tiny-skia",
+  "tokio",
+  "crisp",
+  "web-colors",
+  "x11",
+  "wayland",
+  "linux-theme-detection",
+] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+
+[features]
+default = []
+gpu = ["iced/wgpu"]

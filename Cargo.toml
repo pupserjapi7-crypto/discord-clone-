@@ -10,6 +10,7 @@ members = [
   "crates/ui",
   "crates/loadtest",
   "crates/nova",
+  "crates/client-native",
 ]
 
 [workspace.package]
