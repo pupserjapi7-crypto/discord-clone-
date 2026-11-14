@@ -56,6 +56,19 @@ Server-Release-Build waren vor den Änderungen **grün**.
   Mikrofonauswahl, Rauschunterdrückung umschaltbar, Taubschalten schaltet auch
   stumm, Screenshare-Stopp nimmt die Spur aus der Verbindung.
 
+### Native Sprache (nach 0.4.0, im nativen Client)
+- `crates/client-native/src/voice.rs`: str0m als Gegenstelle zum SFU, cpal für
+  Mikrofon/Lautsprecher, Opus über `unsafe-libopus` (reines Rust, keine
+  C-Toolchain), 20-ms-Frames, Jitter-Puffer 40–200 ms pro Person, Mischen,
+  Sprecher-Ring über Stream-ID `u{user_id}`, Neuverhandlung über den
+  DataChannel, Stumm/Taub/Auflegen, Teilnehmer per `voice_state_update`.
+- **Getestet** (14.11.2026, lokal, zwei native Clients, SFU auf 127.0.0.1):
+  beide ICE-verbunden, Audio in beide Richtungen (~50 Pakete/s je Richtung,
+  > 7.000 Pakete ohne Abbruch), Sprecher-Ring zeigt die richtige Person.
+  Stummschalten konnte die Testautomation nicht klicken (Windows sperrte den
+  Fensterfokus) – bitte manuell prüfen.
+- Nicht gemessen: Mouth-to-Ear-Latenz.
+
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
   Bann/Entbannen, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log – mit

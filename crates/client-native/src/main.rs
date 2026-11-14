@@ -10,8 +10,10 @@ mod gateway;
 mod icon;
 mod style;
 mod update;
+mod voice;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -145,6 +147,15 @@ struct App {
     show_members: bool,
     next_nonce: u64,
     update: UpdateState,
+
+    /// Laufende Sprachverbindung (Fallenlassen = Verlassen).
+    voice: Option<Arc<voice::VoiceHandle>>,
+    voice_joining: Option<i64>,
+    voice_muted: bool,
+    voice_deafened: bool,
+    voice_status: voice::VoiceStatus,
+    /// Wer in welchem Sprachkanal ist.
+    voice_rooms: HashMap<i64, Vec<api::VoiceParticipant>>,
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +187,15 @@ enum Message {
     InstallUpdate,
     UpdateFailed(String),
     DismissUpdate,
+
+    JoinVoice(i64),
+    VoiceJoined(i64, Result<Arc<voice::VoiceHandle>, String>),
+    LeaveVoice,
+    ToggleMute,
+    ToggleDeafen,
+    VoiceTick,
+    VoiceRoom(i64, Result<Vec<api::VoiceParticipant>, String>),
+    Ignore,
 }
 
 impl App {
@@ -209,6 +229,12 @@ impl App {
             show_members: true,
             next_nonce: 1,
             update: UpdateState::Checking,
+            voice: None,
+            voice_joining: None,
+            voice_muted: false,
+            voice_deafened: false,
+            voice_status: voice::VoiceStatus::default(),
+            voice_rooms: HashMap::new(),
         };
         let session = if saved {
             Task::perform(async move { api.refresh().await }, Message::Booted)
@@ -228,11 +254,19 @@ impl App {
         if self.screen != Screen::Chat {
             return Subscription::none();
         }
-        gateway::subscription(gateway::Params {
+        let gateway = gateway::subscription(gateway::Params {
             epoch: self.epoch,
             api: self.api.clone(),
         })
-        .map(Message::Gateway)
+        .map(Message::Gateway);
+        if self.voice.is_some() {
+            // Sprecher-Ring und Verbindungsstatus fünfmal pro Sekunde abholen.
+            let tick = iced::time::every(std::time::Duration::from_millis(200))
+                .map(|_| Message::VoiceTick);
+            Subscription::batch([gateway, tick])
+        } else {
+            gateway
+        }
     }
 
     fn messages(&self) -> &[ChatMessage] {
@@ -338,6 +372,7 @@ impl App {
                         Message::HistoryLoaded(id, result)
                     });
                 }
+                return self.load_room(id);
             }
             Message::HistoryLoaded(id, Ok(list)) => {
                 let mut fresh: Vec<ChatMessage> =
@@ -395,6 +430,7 @@ impl App {
                 return Task::perform(async move { api.logout().await }, |()| Message::LoggedOut);
             }
             Message::LoggedOut => {
+                let _ = self.leave_voice();
                 self.screen = Screen::Login;
                 self.gateway = None;
                 self.me = None;
@@ -426,8 +462,101 @@ impl App {
             }
             Message::UpdateFailed(err) => self.update = UpdateState::Failed(err),
             Message::DismissUpdate => self.update = UpdateState::Idle,
+
+            Message::JoinVoice(channel_id) => {
+                if self.voice_joining.is_some() {
+                    return Task::none();
+                }
+                // Ein Kanal zur Zeit: alte Verbindung zuerst beenden.
+                let leave = self.leave_voice();
+                self.voice_joining = Some(channel_id);
+                self.voice_muted = false;
+                self.voice_deafened = false;
+                let api = self.api.clone();
+                let join = Task::perform(
+                    async move { voice::join(api, channel_id).await.map(Arc::new) },
+                    move |result| Message::VoiceJoined(channel_id, result),
+                );
+                return Task::batch([leave, join]);
+            }
+            Message::VoiceJoined(channel_id, result) => {
+                self.voice_joining = None;
+                match result {
+                    Ok(handle) => {
+                        self.voice = Some(handle);
+                        return self.load_room(channel_id);
+                    }
+                    Err(err) => self.error = Some(format!("Sprachkanal: {err}")),
+                }
+            }
+            Message::LeaveVoice => return self.leave_voice(),
+            Message::ToggleMute => {
+                self.voice_muted = !self.voice_muted;
+                return self.push_voice_state();
+            }
+            Message::ToggleDeafen => {
+                self.voice_deafened = !self.voice_deafened;
+                // Wer nichts hört, spricht auch nicht.
+                if self.voice_deafened {
+                    self.voice_muted = true;
+                }
+                return self.push_voice_state();
+            }
+            Message::VoiceTick => {
+                if let Some(handle) = &self.voice {
+                    let status = handle.status();
+                    if status.ended {
+                        if let Some(err) = status.error.clone() {
+                            self.error = Some(err);
+                        }
+                        return self.leave_voice();
+                    }
+                    self.voice_status = status;
+                }
+            }
+            Message::VoiceRoom(channel_id, Ok(list)) => {
+                self.voice_rooms.insert(channel_id, list);
+            }
+            Message::VoiceRoom(_, Err(_)) | Message::Ignore => {}
         }
         Task::none()
+    }
+
+    fn load_room(&self, channel_id: i64) -> Task<Message> {
+        let api = self.api.clone();
+        Task::perform(
+            async move { api.voice_participants(channel_id).await },
+            move |result| Message::VoiceRoom(channel_id, result),
+        )
+    }
+
+    /// Verbindung lösen (Threads enden beim Fallenlassen) und dem Server melden.
+    fn leave_voice(&mut self) -> Task<Message> {
+        let Some(handle) = self.voice.take() else {
+            return Task::none();
+        };
+        let channel_id = handle.channel_id;
+        drop(handle);
+        self.voice_status = voice::VoiceStatus::default();
+        let api = self.api.clone();
+        Task::perform(async move { api.voice_leave(channel_id).await }, |_| {
+            Message::Ignore
+        })
+    }
+
+    fn push_voice_state(&self) -> Task<Message> {
+        let Some(handle) = &self.voice else {
+            return Task::none();
+        };
+        handle.set_muted(self.voice_muted);
+        handle.set_deafened(self.voice_deafened);
+        let api = self.api.clone();
+        let (channel_id, muted, deafened) =
+            (handle.channel_id, self.voice_muted, self.voice_deafened);
+        Task::perform(
+            async move { api.voice_state(channel_id, muted, deafened).await },
+            |_| Message::Ignore,
+        )
     }
 
     fn on_gateway(&mut self, event: GatewayEvent) -> Task<Message> {
@@ -484,6 +613,10 @@ impl App {
                     if let Some(list) = self.history.get_mut(&channel_id) {
                         list.retain(|m| m.id != Some(message_id));
                     }
+                }
+                Event::VoiceStateUpdate { channel_id, .. } => {
+                    // Teilnehmerliste dieses Kanals neu holen statt zu pollen.
+                    return self.load_room(channel_id);
                 }
                 _ => {}
             },
@@ -965,6 +1098,172 @@ impl App {
         .into()
     }
 
+    fn view_voice<'a>(&'a self, channel: &'a Channel) -> Element<'a, Message> {
+        let here = self.voice.as_ref().map(|v| v.channel_id) == Some(channel.id);
+        let joining = self.voice_joining == Some(channel.id);
+        let me = self.me.as_ref().map(|m| m.id);
+        let status = &self.voice_status;
+        let speaking: Vec<i64> = status
+            .speaking
+            .iter()
+            .map(|id| if *id == -1 { me.unwrap_or(-1) } else { *id })
+            .collect();
+        let people = self
+            .voice_rooms
+            .get(&channel.id)
+            .cloned()
+            .unwrap_or_default();
+
+        let tiles = people.into_iter().map(|person| {
+            let talking = here && speaking.contains(&person.user_id);
+            let muted = person.muted || person.deafened;
+            let mut name_row = row![
+                text(person.display_name.clone())
+                    .size(13)
+                    .color(style::TEXT)
+            ]
+            .spacing(6)
+            .align_y(iced::Center);
+            if muted {
+                name_row = name_row.push(icon(
+                    if person.deafened {
+                        Icon::HeadphonesOff
+                    } else {
+                        Icon::MicOff
+                    },
+                    14.0,
+                    style::DANGER,
+                ));
+            }
+            container(
+                column![avatar(&person.display_name, 64.0), name_row]
+                    .spacing(10)
+                    .align_x(iced::Center),
+            )
+            .center_x(180)
+            .center_y(132)
+            .style(move |_: &Theme| style::voice_tile(talking))
+            .into()
+        });
+        let grid = iced::widget::row(tiles).spacing(12).wrap();
+
+        let controls: Element<'_, Message> = if here {
+            let state = if status.connected {
+                text("Verbunden").color(style::ONLINE)
+            } else {
+                text("Verbinde …").color(style::WARN)
+            };
+            let mic_on = !self.voice_muted;
+            let ears_on = !self.voice_deafened;
+            row![
+                state.size(13),
+                space().width(Fill),
+                tip(
+                    button(icon(
+                        if mic_on { Icon::Mic } else { Icon::MicOff },
+                        20.0,
+                        if mic_on { style::TEXT } else { style::DANGER }
+                    ))
+                    .padding(10)
+                    .on_press(Message::ToggleMute)
+                    .style(move |theme, status| style::icon_button(theme, status, !mic_on)),
+                    if mic_on {
+                        "Stummschalten"
+                    } else {
+                        "Mikrofon einschalten"
+                    },
+                    tooltip::Position::Top,
+                ),
+                tip(
+                    button(icon(
+                        if ears_on {
+                            Icon::Headphones
+                        } else {
+                            Icon::HeadphonesOff
+                        },
+                        20.0,
+                        if ears_on { style::TEXT } else { style::DANGER }
+                    ))
+                    .padding(10)
+                    .on_press(Message::ToggleDeafen)
+                    .style(move |theme, status| style::icon_button(theme, status, !ears_on)),
+                    if ears_on {
+                        "Taub schalten"
+                    } else {
+                        "Ton einschalten"
+                    },
+                    tooltip::Position::Top,
+                ),
+                tip(
+                    button(icon(Icon::PhoneOff, 20.0, style::ON_ACCENT))
+                        .padding(10)
+                        .on_press(Message::LeaveVoice)
+                        .style(style::danger_button),
+                    "Auflegen",
+                    tooltip::Position::Top,
+                ),
+            ]
+            .spacing(8)
+            .align_y(iced::Center)
+            .into()
+        } else {
+            row![
+                text(if joining {
+                    "Verbinde …"
+                } else {
+                    "Noch nicht verbunden"
+                })
+                .size(13)
+                .color(style::MUTED),
+                space().width(Fill),
+                button(
+                    row![
+                        icon(Icon::Volume, 16.0, style::ON_ACCENT),
+                        text("Beitreten")
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Center)
+                )
+                .padding([10, 16])
+                .on_press_maybe((!joining).then_some(Message::JoinVoice(channel.id)))
+                .style(style::primary),
+            ]
+            .align_y(iced::Center)
+            .into()
+        };
+
+        let mut body = column![].spacing(16).padding(24);
+        if self.voice_rooms.get(&channel.id).is_none_or(Vec::is_empty) {
+            body = body.push(
+                text("Noch niemand hier – tritt bei, die anderen sehen dich sofort.")
+                    .color(style::MUTED),
+            );
+        }
+        body = body.push(grid);
+        if here && let Some(warning) = &status.error {
+            body = body.push(text(warning.clone()).size(13).color(style::WARN));
+        }
+        if here {
+            body = body.push(
+                text(format!(
+                    "Pakete gesendet {} · empfangen {}",
+                    status.packets_out, status.packets_in
+                ))
+                .size(11)
+                .color(style::FAINT),
+            );
+        }
+        column![
+            scrollable(body).height(Fill),
+            container(controls)
+                .padding([12, 24])
+                .width(Fill)
+                .style(style::voice_bar),
+        ]
+        .height(Fill)
+        .into()
+    }
+
     fn view_main(&self) -> Element<'_, Message> {
         let channel = self.current_channel();
         let is_voice = channel.map(|c| c.kind != 0).unwrap_or(false);
@@ -1024,12 +1323,7 @@ impl App {
             return column![header, body].into();
         };
         if is_voice {
-            let body = empty_state(
-                Icon::Volume,
-                channel.name.clone(),
-                "Sprache kommt im nächsten Schritt nativ (str0m + cpal + Opus).",
-            );
-            return column![header, body].into();
+            return column![header, self.view_voice(channel)].into();
         }
 
         let messages = self.messages();

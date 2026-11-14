@@ -72,6 +72,46 @@ fn fill(color: Color) -> container::Style {
     }
 }
 
+/// Voice-Kachel; sprechende Personen bekommen einen 2-px-Ring in Grün.
+pub fn voice_tile(speaking: bool) -> container::Style {
+    container::Style {
+        border: Border {
+            color: if speaking { ONLINE } else { BORDER },
+            width: if speaking { 2.0 } else { 1.0 },
+            radius: 14.0.into(),
+        },
+        ..fill(RAISED)
+    }
+}
+
+pub fn voice_bar(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: BORDER,
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..fill(SIDEBAR)
+    }
+}
+
+pub fn danger_button(_: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered | button::Status::Pressed => color!(0xe8848d),
+        _ => DANGER,
+    };
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: ON_ACCENT,
+        border: Border {
+            radius: 999.0.into(),
+            ..Border::default()
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
 pub fn app_bg(_: &Theme) -> container::Style {
     fill(MAIN)
 }

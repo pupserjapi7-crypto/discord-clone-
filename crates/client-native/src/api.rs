@@ -276,6 +276,69 @@ impl Api {
         )
         .await
     }
+
+    /// SDP-Offer (JSON von str0m) senden, Answer (JSON) zurück.
+    pub async fn voice_join(&self, channel: i64, offer_json: &str) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct Answer {
+            sdp: String,
+        }
+        let answer: Answer = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/api/v1/channels/{channel}/voice/join"),
+                Some(serde_json::json!({ "sdp": offer_json })),
+            )
+            .await?;
+        Ok(answer.sdp)
+    }
+
+    pub async fn voice_leave(&self, channel: i64) -> Result<(), String> {
+        let _: serde_json::Value = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/api/v1/channels/{channel}/voice/leave"),
+                Some(serde_json::json!({})),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn voice_state(
+        &self,
+        channel: i64,
+        muted: bool,
+        deafened: bool,
+    ) -> Result<(), String> {
+        let _: serde_json::Value = self
+            .request(
+                reqwest::Method::POST,
+                &format!("/api/v1/channels/{channel}/voice/state"),
+                Some(serde_json::json!({ "muted": muted, "deafened": deafened, "screen": false })),
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn voice_participants(&self, channel: i64) -> Result<Vec<VoiceParticipant>, String> {
+        self.request(
+            reqwest::Method::GET,
+            &format!("/api/v1/channels/{channel}/voice/participants"),
+            None,
+        )
+        .await
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceParticipant {
+    #[serde(deserialize_with = "id")]
+    pub user_id: i64,
+    pub display_name: String,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub deafened: bool,
 }
 
 // ---------------------------------------------------------------------------

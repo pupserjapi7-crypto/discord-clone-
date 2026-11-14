@@ -30,6 +30,11 @@ iced = { version = "0.14", default-features = false, features = [
   "linux-theme-detection",
 ] }
 reqwest.workspace = true
+# Voice: dieselbe WebRTC-Bibliothek wie der SFU, Audio-I/O und Opus in Rust
+# (libopus per c2rust übersetzt – keine C-Toolchain nötig).
+str0m = "0.25"
+cpal = "0.18"
+unsafe-libopus = "0.2"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

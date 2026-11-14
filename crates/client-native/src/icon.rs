@@ -23,6 +23,11 @@ pub enum Icon {
     Refresh,
     Message,
     Close,
+    Mic,
+    MicOff,
+    Headphones,
+    HeadphonesOff,
+    PhoneOff,
 }
 
 struct Glyph {
@@ -221,6 +226,71 @@ impl<M> canvas::Program<M> for Glyph {
                     b.line_to(p(18.0, 18.0));
                 });
                 frame.stroke(&path, stroke);
+            }
+            Icon::Mic | Icon::MicOff => {
+                // Kapsel 9–15 × 2–15, Bügel darunter, Stiel.
+                let capsule = Path::new(|b| {
+                    b.move_to(p(9.0, 5.0));
+                    arc(b, 12.0, 5.0, 3.0, PI, 2.0 * PI);
+                    b.line_to(p(15.0, 12.0));
+                    arc(b, 12.0, 12.0, 3.0, 0.0, PI);
+                    b.close();
+                });
+                frame.stroke(&capsule, stroke);
+                let stand = Path::new(|b| {
+                    arc(b, 12.0, 11.0, 7.0, 0.0, PI);
+                    b.move_to(p(12.0, 18.0));
+                    b.line_to(p(12.0, 22.0));
+                });
+                frame.stroke(&stand, stroke);
+                if self.icon == Icon::MicOff {
+                    let slash = Path::new(|b| {
+                        b.move_to(p(3.0, 3.0));
+                        b.line_to(p(21.0, 21.0));
+                    });
+                    frame.stroke(&slash, stroke);
+                }
+            }
+            Icon::Headphones | Icon::HeadphonesOff => {
+                let band = Path::new(|b| {
+                    b.move_to(p(3.0, 18.0));
+                    b.line_to(p(3.0, 13.0));
+                    arc(b, 12.0, 13.0, 9.0, PI, 2.0 * PI);
+                    b.line_to(p(21.0, 18.0));
+                });
+                frame.stroke(&band, stroke);
+                for x in [3.0, 17.0] {
+                    let cup = Path::new(|b| {
+                        b.move_to(p(x, 14.0));
+                        b.line_to(p(x + 4.0, 14.0));
+                        b.line_to(p(x + 4.0, 21.0));
+                        b.line_to(p(x, 21.0));
+                        b.close();
+                    });
+                    frame.stroke(&cup, stroke);
+                }
+                if self.icon == Icon::HeadphonesOff {
+                    let slash = Path::new(|b| {
+                        b.move_to(p(2.0, 2.0));
+                        b.line_to(p(22.0, 22.0));
+                    });
+                    frame.stroke(&slash, stroke);
+                }
+            }
+            Icon::PhoneOff => {
+                // Liegender Hörer: Bogen mit zwei Muscheln, nach unten gekippt.
+                let handset = Path::new(|b| {
+                    arc(b, 12.0, 17.0, 9.0, 1.15 * PI, 1.85 * PI);
+                    b.move_to(p(3.6, 13.6));
+                    b.line_to(p(3.0, 17.0));
+                    b.line_to(p(7.0, 17.0));
+                    b.line_to(p(7.6, 14.2));
+                    b.move_to(p(20.4, 13.6));
+                    b.line_to(p(21.0, 17.0));
+                    b.line_to(p(17.0, 17.0));
+                    b.line_to(p(16.4, 14.2));
+                });
+                frame.stroke(&handset, stroke);
             }
         }
         vec![frame.into_geometry()]

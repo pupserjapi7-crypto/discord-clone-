@@ -4,6 +4,17 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-14 — Native Sprache mit str0m, cpal und `unsafe-libopus`
+
+**Entscheidung:** Der native Client spricht WebRTC selbst über str0m (dieselbe
+Bibliothek wie der SFU), nutzt cpal für Audio und Opus über `unsafe-libopus`
+(per c2rust übersetzte Referenzbibliothek).
+
+**Warum:** „Nur Rust“ ohne C-Toolchain: libopus-Bindings bräuchten cmake/CC,
+die auf dem Ziel-Windows-Rechner (mingw) fehlen. Eine eigene
+Echo-Unterdrückung gibt es nicht; Kopfhörer werden empfohlen. Gepuffert wird
+40–200 ms pro Person, Latenz geht vor Lückenlosigkeit.
+
 ## 2026-11-14 — Web-UI: Signale statt Snapshot, Abläufe aus Dialogen mit `spawn_forever`
 
 **Entscheidung:** Der UI-Zustand ist ein `Store` aus einzelnen Signalen
