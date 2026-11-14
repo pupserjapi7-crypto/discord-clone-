@@ -165,13 +165,21 @@ fn stringify_ids(value: Value) -> Value {
             map.into_iter()
                 .map(|(key, value)| {
                     let is_id = key == "id" || key.ends_with("_id");
-                    let value = if is_id {
-                        match value {
-                            Value::Number(number) => Value::String(number.to_string()),
-                            other => other,
-                        }
-                    } else {
-                        stringify_ids(value)
+                    // Listen von IDs (`role_ids`, …) ebenfalls als Strings.
+                    let is_id_list = key.ends_with("_ids");
+                    let value = match value {
+                        Value::Number(number) if is_id => Value::String(number.to_string()),
+                        Value::Array(items) if is_id_list => Value::Array(
+                            items
+                                .into_iter()
+                                .map(|item| match item {
+                                    Value::Number(number) => Value::String(number.to_string()),
+                                    other => other,
+                                })
+                                .collect(),
+                        ),
+                        other if is_id => other,
+                        other => stringify_ids(other),
                     };
                     (key, value)
                 })

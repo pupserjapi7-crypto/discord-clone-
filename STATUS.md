@@ -1,99 +1,105 @@
 # Nova — Status
 
-**Stand:** 14.11.2026 · **Version:** 0.4.0 (in Arbeit, Master-Prompt v0.2.2 → v1.0)
-**Live:** <https://85-215-175-202.sslip.io> (läuft noch mit v0.2.2)
+**Stand:** 14.11.2026 · **Version:** 0.4.0 (Master-Prompt v0.2.2 → v1.0, Teil 1)
+**Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
-Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Nächste Schritte*
-ist die Arbeitsliste.
+Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
+Arbeitsliste, in dieser Reihenfolge.
 
 ---
 
-## Bestandsaufnahme (Abschnitt 0 des Master-Prompts)
+## Bestandsaufnahme (Abschnitt 0)
 
-Lauf am 14.11.2026 auf Windows: `dx build`, fmt, clippy (Workspace + WASM),
-Tests und `cargo build --release -p nova` waren **alle grün**. WASM 839 KB
-unkomprimiert.
+Lauf am 14.11.2026: `dx build`, fmt, clippy (Workspace + WASM), Tests und
+Server-Release-Build waren vor den Änderungen **grün**.
 
-### Wirklich geprüft
-
-- Text-Chat, Auth (Argon2id, Refresh-Rotation mit Reuse-Erkennung), Gateway mit
-  Resume – jetzt durch Integrationstests gegen einen echten Server abgedeckt
-  (`crates/nova/tests/api.rs`).
-- Nativer Desktop-Client 0.3.0: Login, Kanäle, Nachrichten, Update-Prüfung gegen
-  GitHub; lokal gemessen ~22–30 MB RAM, erste Ansicht ~10 ms.
-- Release-Workflow v0.3.0: alle 6 Jobs grün, Assets für Server, Tauri und
-  nativen Client inkl. `.sha256`.
-
-### Nur behauptet (nicht nachgewiesen)
-
-| Behauptung | Wirklichkeit |
+| Behauptung (alt) | Wirklichkeit |
 |---|---|
-| Voice funktioniert | Nur ICE/DTLS im Zwei-Client-Test verbunden. Dass **Audio beim Gegenüber ankommt**, ist nicht gemessen; Mouth-to-Ear unbekannt. |
-| Screenshare 1080p60 | Nur synthetischer Video-Track; echte Display-Aufnahme nie getestet. |
-| „Uploads hinter `BlobStore`“ (README) | **Nicht implementiert.** Es gibt Tabelle und URL-Schema, aber keinen Upload-Endpunkt, keinen `BlobStore`, kein Ausliefern. |
-| Installer funktionieren | Gebaut, aber nie installiert; unsigniert. |
+| Voice funktioniert | Nur ICE/DTLS im Zwei-Client-Test; Audio beim Gegenüber und Mouth-to-Ear **nicht gemessen** |
+| Screenshare 1080p60 | Nur synthetischer Track; echte Display-Aufnahme nie getestet |
+| Uploads hinter `BlobStore` | **Gab es nicht** (nur Tabelle + URL-Schema) – README korrigiert |
+| Volltextsuche (`tsvector`) | **Gab es nicht** – README korrigiert |
+| Installer funktionieren | Gebaut, nie installiert, unsigniert |
 
-### Gefundene Bugs
+### Gefundene und behobene Fehler
 
-| Bug | Status |
-|---|---|
-| **Sicherheit:** `effective_permissions` prüfte keine Mitgliedschaft. Über das Gateway konnte jeder angemeldete Nutzer mit bekannter Kanal-ID fremde Kanäle abonnieren und hineinschreiben. | **behoben** (v0.4), Regressionstest `gateway_rejects_non_members` |
-| CI wandte nur `0001_init.sql` an | behoben: alle Migrationen |
-| `crates/ui/dist` sammelte alte WASM-Dateien an (dx räumt nicht auf) | behoben in `cargo xtask ui` |
-| Web-UI prüft Passwort ≥ 8, Server verlangt ≥ 10 | offen → P5 |
-| Web-UI klont den ganzen State bei jedem Render, scrollt bei jedem Render nach unten, ordnet eigene Nachrichten über den Text statt die Nonce zu | offen → P4 |
-| Web-UI fragt Voice-Teilnehmer alle 4 s per HTTP ab | Server sendet jetzt `voice_state_update`; Client-Umbau offen → P2 |
-| Screenshare-Stopp nimmt die Spur nicht aus der PeerConnection, fremde Video-Elemente bleiben nach Verlassen stehen | offen → P2 |
-| Tauri-Hülle: `csp: null`, lädt die Live-URL fest verdrahtet | offen → P5 |
-
----
-
-## Erledigt in diesem Durchlauf
-
-### P1 – Stabilisieren
-- Rechte-Lücke geschlossen (s. o.); Nicht-Mitglieder und Gebannte bekommen
-  keine Rechte.
-- `cargo xtask ui|gallery|build|check|all` ersetzt die Shell-Kette
-  (`xtask/`, Alias in `.cargo/config.toml`).
-- 7 Integrationstests: Auth inkl. Refresh-Rotation, Rechte, Nachrichten-CRUD,
-  Pins, Threads, Moderation, Bots, Gateway-Roundtrip, Gateway-Abweisung von
-  Nicht-Mitgliedern. Dazu Protokoll-Tests für alle neuen Events und für
-  Abwärtskompatibilität alter `MessageView`s.
-- `CLAUDE.md` und 7 Projekt-Skills unter `.claude/skills/`.
-
-### P3 – Server-Seite
-- Migration `0002`: Timeouts, Banns, Audit-Log, Slowmode, Threads
-  (`kind = 2`), Pins, Bot-Konten und Bot-Tokens. Nur additiv.
-- Moderation: Kick, Bann/Entbannen, Timeout (entzieht Schreiben/Sprechen),
-  Rollen anlegen/ändern/löschen/zuweisen, Kanal-Overrides, Slowmode,
-  Nachrichten löschen und anpinnen, Audit-Log – alles mit Hierarchie-Prüfung
-  und Audit-Eintrag.
-- Threads aus Nachrichten, Archivieren, Ungelesen-Stand pro Kanal in
-  `GET /guilds/{id}`.
-- Bot-API mit `nb_`-Tokens für REST und Gateway, Doku `docs/04-bot-api.md`,
-  Beispiel `examples/echo-bot`.
-- Neue Gateway-Events (`guild_update`, `guild_member_remove`,
-  `guild_member_update`, `message_pin`, `voice_state_update`) – ältere Clients
-  ignorieren sie.
-
-### P2 – Server-Seite
-- SFU vergibt Stream-IDs `u{user_id}` (Zuordnung von Ton/Bild zu Personen).
-- Höchstens 8 gleichzeitige Videospuren pro Raum.
-- `POST /channels/{id}/voice/state` (stumm/taub/Bildschirm) und
-  `voice_state_update`-Events statt Polling; Beitritt verlangt `CONNECT`.
+- **Sicherheit:** `effective_permissions` prüfte keine Mitgliedschaft – über das
+  Gateway konnte jeder mit bekannter Kanal-ID fremde Kanäle abonnieren und
+  beschreiben. Behoben, Regressionstest `gateway_rejects_non_members`.
+- REST lieferte `role_ids` als 64-Bit-Zahlen → Web-UI konnte Guild-Details
+  nicht lesen. `json_ids` behandelt jetzt auch `*_ids`, Test ergänzt.
+- Web-UI: Enter schickte weder Nachrichten noch Formulare ab; Dialoge ohne
+  Fokus; ganzer State bei jedem Render geklont; Auto-Scroll riss nach unten;
+  eigene Nachrichten über den Text statt die Nonce zugeordnet; Passwortregel 8
+  statt 10; Zeitstempel in UTC; Voice-Teilnehmer per 4-s-Polling;
+  Screenshare-Stopp ließ eingefrorenes Bild; fremde Video-Elemente blieben
+  stehen. Alles behoben im Neubau der UI.
+- Abläufe aus Dialogen brachen beim Schließen ab (Dioxus-`spawn` gehört dem
+  Dialog) → `spawn_forever`.
+- CI wandte nur `0001_init.sql` an; `crates/ui/dist` sammelte alte WASM-Dateien.
 
 ---
 
-## Nächste Schritte
+## Fertig in 0.4.0
 
-1. **Web-UI (P4 + P2-Client + P3-UI + P5):** Token-Migration auf `--nv-*`,
-   Komponenten aufteilen, Galerie `/dev/gallery`, Moderations-UI,
-   Thread-Seitenleiste, Ungelesen-Badges, Voice-Grid mit Sprecher-Ring,
-   Lautstärke pro Person, Push-to-Talk, Ping, Einstellungen, Onboarding.
-2. Screenshots nach `docs/screenshots/` (Dark/Light).
-3. Uploads mit `BlobStore` nachrüsten (README-Versprechen).
-4. Tauri: CSP, Tray, Benachrichtigungen.
-5. Messwerte erheben und in `docs/03-roadmap.md` eintragen; Version, Commit.
+### P1 Stabilisieren
+- `cargo xtask ui|gallery|build|check|all` (Rust statt Shell), README gekürzt.
+- 7 Integrationstests gegen echten Server (Auth/Rotation, Rechte, CRUD, Pins,
+  Threads, Moderation, Bots, Gateway-Roundtrip, Gateway-Abweisung), dazu
+  Protokoll-Kompatibilitätstests. `CLAUDE.md` und 7 Skills.
+
+### P2 Voice (soweit ohne echte Geräte prüfbar)
+- SFU: Stream-IDs `u{user_id}`, max. 8 Videospuren/Raum, `voice/state`,
+  `voice_state_update` statt Polling, Beitritt nur mit `CONNECT`.
+- Client: Sprecher-Ring (AnalyserNode), Lautstärke pro Person, Push-to-Talk
+  mit frei wählbarer Taste, Ping aus `getStats`, Reconnect bei ICE-Ausfall,
+  Mikrofonauswahl, Rauschunterdrückung umschaltbar, Taubschalten schaltet auch
+  stumm, Screenshare-Stopp nimmt die Spur aus der Verbindung.
+
+### P3 Features
+- Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
+  Bann/Entbannen, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log – mit
+  Hierarchie-Prüfung, UI in Profilkarte und Server-Einstellungen.
+- Threads: aus Nachricht starten, Seitenleiste, Archivieren, Ungelesen-Stand.
+- Bot-API + `docs/04-bot-api.md` + `examples/echo-bot`.
+
+### P4 Design
+- Nova-Tokens `--nv-*`, Dark/Light/System, Layout 72/248/flex/248, Pill-Marker,
+  Voice-Grid, Dock-Pill, Palette 560 px, Erwähnungen, „Neu“-Trenner,
+  Lucide-Icons. Galerie `/dev/gallery` (nur Dev-Build). Screenshots:
+  `docs/screenshots/` (Chat, Thread, Voice, Screenshare, Palette,
+  Einstellungen, Moderation, Profilkarte, Login, Onboarding).
+- Design mit dem Plugin „UI Design Review“ geprüft, Funde behoben.
+
+### P5 Komfort
+- Einstellungen: Profil, Audio, Theme, Schriftgröße, Tastenkürzel,
+  Benachrichtigungen bei Erwähnung (Browser-API).
+- Skeletons, Fehlerzustände mit „Erneut versuchen“, Offline-Banner,
+  fehlgeschlagene Nachrichten mit „Erneut senden“, Onboarding.
+- Nachrichten bearbeiten, Reaktionen, Emoji-Auswahl, ältere Nachrichten laden.
+
+### Messwerte
+
+Siehe `docs/03-roadmap.md`: Dispatch-p99 0,98 ms, Server-RAM 11,5 MB Leerlauf,
+WASM 501 KB gzip.
+
+---
+
+## Offen
+
+1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
+   Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
+   automatisierbar.
+2. **Uploads:** `BlobStore` (content-addressed, SHA-256), Upload-Endpunkt mit
+   Größenlimit, Download nur für Kanalmitglieder, „+“ im Composer.
+3. **Tauri:** CSP statt `null`, Tray (Anzeigen/Beenden), native
+   Benachrichtigungen, Autostart optional. Lokal nicht baubar ohne MSVC/WebView2-SDK;
+   die CI baut die Installer.
+4. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
+   Systemaudio; Kamera.
+5. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
+6. Inter/JetBrains Mono lokal einbetten (Entscheidung offen, s. DECISIONS).
+7. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
 
 ---
 

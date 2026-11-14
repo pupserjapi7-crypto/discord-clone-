@@ -54,6 +54,26 @@ systemctl restart nova
 `nova update` verifies the SHA-256 asset before swapping the release symlink.
 The service restart is done by root because the updater does not elevate itself.
 
+### Update auf 0.4.0 (Moderation, Threads, Bots, neue Web-UI)
+
+`nova serve` wendet Migration `0002` beim Start selbst an. Sie ist rein
+additiv (neue Spalten mit Default, neue Tabellen); 0.2.x-Clients laufen weiter.
+Vorher sichern:
+
+```bash
+# als root auf dem VPS
+/usr/local/bin/nova-backup                                   # DB-Dump nach /var/backups/nova
+su -s /bin/sh nova -c 'NOVA_UPDATE_REPO=pupserjapi7-crypto/discord-clone- /opt/nova/current/nova update --no-restart'
+su -s /bin/sh nova -c 'set -a; . /etc/nova/nova.env; /opt/nova/current/nova migrate'
+systemctl restart nova
+journalctl -u nova -n 30 --no-pager                         # „migrations applied“, „nova listening“
+curl -fsS https://85-215-175-202.sslip.io/readyz
+```
+
+Voraussetzung: ein Release `v0.4.0` existiert (Tag pushen startet den
+Release-Workflow). Rückweg: vorheriges Binary unter `/opt/nova/releases/`
+verlinken und neu starten – das Schema bleibt kompatibel.
+
 ## Apache / TLS (eigene vHost-Datei)
 
 Die Nova-vHosts liegen in `/etc/apache2/conf-available/nova-ssl.conf` und werden

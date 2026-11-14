@@ -1,18 +1,23 @@
+//! REST-Client der Web-UI. Antworten kommen als JSON mit String-IDs.
+
 use std::sync::Mutex;
 
 use gloo_net::http::{Request, RequestBuilder};
 use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 
 use crate::types::*;
 
 static TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn set_token(value: Option<String>) {
-    *TOKEN.lock().unwrap() = value;
+    if let Ok(mut token) = TOKEN.lock() {
+        *token = value;
+    }
 }
 
 pub fn token() -> Option<String> {
-    TOKEN.lock().unwrap().clone()
+    TOKEN.lock().ok().and_then(|token| token.clone())
 }
 
 fn auth_header(builder: RequestBuilder) -> RequestBuilder {
@@ -22,60 +27,71 @@ fn auth_header(builder: RequestBuilder) -> RequestBuilder {
     }
 }
 
+/// Fehlermeldungen des Servers in verständliches Deutsch übersetzen.
+fn friendly(status: u16, code: &str, message: &str) -> String {
+    match (status, code) {
+        (401, _) => "Anmeldung abgelaufen oder ungültig.".into(),
+        (403, _) => "Dafür fehlen dir die Rechte.".into(),
+        (404, _) => "Nicht gefunden – vielleicht wurde es gelöscht.".into(),
+        (409, _) if message.contains("taken") => "Dieser Name ist schon vergeben.".into(),
+        (409, _) if message.contains("archived") => "Der Thread ist archiviert.".into(),
+        (429, _) => "Etwas langsamer bitte – Rate-Limit oder Slowmode.".into(),
+        (400, _) if message.contains("password") => {
+            "Das Passwort braucht mindestens 10 Zeichen.".into()
+        }
+        (400, _) if message.contains("handle") => {
+            "Handle: 3–32 Zeichen, nur a–z, 0–9, Punkt und Unterstrich.".into()
+        }
+        (500.., _) => "Der Server hat einen Fehler gemeldet. Bitte später erneut versuchen.".into(),
+        _ if !message.is_empty() => message.to_owned(),
+        _ => format!("Anfrage fehlgeschlagen (HTTP {status})."),
+    }
+}
+
 async fn send<T: DeserializeOwned>(
     method: &str,
     path: &str,
-    body: Option<serde_json::Value>,
+    body: Option<Value>,
 ) -> Result<T, String> {
     let builder = match method {
         "GET" => Request::get(path),
         "POST" => Request::post(path),
+        "PUT" => Request::put(path),
         "PATCH" => Request::patch(path),
         "DELETE" => Request::delete(path),
-        _ => return Err(format!("unsupported method {method}")),
+        _ => return Err(format!("unbekannte Methode {method}")),
     };
     let builder = auth_header(builder.credentials(web_sys::RequestCredentials::Include));
     let response = match body {
         Some(value) => {
-            let payload = serde_json::to_string(&value).map_err(|err| err.to_string())?;
             builder
                 .header("content-type", "application/json")
-                .body(payload)
+                .body(value.to_string())
                 .map_err(|err| err.to_string())?
                 .send()
                 .await
-                .map_err(|err| err.to_string())?
         }
-        None => builder.send().await.map_err(|err| err.to_string())?,
-    };
+        None => builder.send().await,
+    }
+    .map_err(|_| "Keine Verbindung zum Server.".to_string())?;
     let status = response.status();
-    let text = response.text().await.map_err(|err| err.to_string())?;
+    let text = response.text().await.unwrap_or_default();
     if !(200..300).contains(&status) {
-        let message = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|value| {
-                value
-                    .get("message")
-                    .and_then(|m| m.as_str())
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| format!("HTTP {status}"));
-        return Err(message);
+        let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+        let code = parsed.get("code").and_then(Value::as_str).unwrap_or("");
+        let message = parsed.get("message").and_then(Value::as_str).unwrap_or("");
+        return Err(friendly(status, code, message));
     }
-    if text.is_empty() {
-        return serde_json::from_str("null").map_err(|err| err.to_string());
-    }
-    serde_json::from_str(&text).map_err(|err| format!("decode: {err}"))
+    let text = if text.is_empty() { "null" } else { &text };
+    serde_json::from_str(text).map_err(|err| format!("Antwort unlesbar: {err}"))
 }
 
-async fn send_empty(
-    method: &str,
-    path: &str,
-    body: Option<serde_json::Value>,
-) -> Result<(), String> {
-    let _: serde_json::Value = send(method, path, body).await?;
+async fn send_empty(method: &str, path: &str, body: Option<Value>) -> Result<(), String> {
+    let _: Value = send(method, path, body).await?;
     Ok(())
 }
+
+// ------------------------------------------------------------------- Auth
 
 pub async fn refresh() -> Result<User, String> {
     let response: AuthResponse = send("POST", "/api/v1/auth/refresh", None).await?;
@@ -83,22 +99,16 @@ pub async fn refresh() -> Result<User, String> {
     Ok(response.user)
 }
 
-pub async fn login(handle: &str, password: &str) -> Result<User, String> {
+pub async fn login(handle: &str, password: &str, register: bool) -> Result<User, String> {
+    let path = if register {
+        "/api/v1/auth/register"
+    } else {
+        "/api/v1/auth/login"
+    };
     let response: AuthResponse = send(
         "POST",
-        "/api/v1/auth/login",
-        Some(serde_json::json!({ "handle": handle, "password": password })),
-    )
-    .await?;
-    set_token(Some(response.access_token));
-    Ok(response.user)
-}
-
-pub async fn register(handle: &str, password: &str) -> Result<User, String> {
-    let response: AuthResponse = send(
-        "POST",
-        "/api/v1/auth/register",
-        Some(serde_json::json!({ "handle": handle, "password": password })),
+        path,
+        Some(json!({ "handle": handle, "password": password })),
     )
     .await?;
     set_token(Some(response.access_token));
@@ -111,6 +121,17 @@ pub async fn logout() -> Result<(), String> {
     result
 }
 
+pub async fn update_profile(display_name: &str) -> Result<User, String> {
+    send(
+        "PATCH",
+        "/api/v1/users/@me",
+        Some(json!({ "display_name": display_name })),
+    )
+    .await
+}
+
+// ---------------------------------------------------------- Guilds/Kanäle
+
 pub async fn guilds() -> Result<Vec<GuildSummary>, String> {
     send("GET", "/api/v1/guilds", None).await
 }
@@ -119,57 +140,175 @@ pub async fn guild(id: &str) -> Result<GuildDetail, String> {
     send("GET", &format!("/api/v1/guilds/{id}"), None).await
 }
 
-pub async fn messages(channel: &str) -> Result<Vec<Message>, String> {
-    send(
-        "GET",
-        &format!("/api/v1/channels/{channel}/messages?limit=50"),
-        None,
-    )
-    .await
-}
-
 pub async fn create_guild(name: &str) -> Result<Guild, String> {
-    send(
-        "POST",
-        "/api/v1/guilds",
-        Some(serde_json::json!({ "name": name })),
-    )
-    .await
+    send("POST", "/api/v1/guilds", Some(json!({ "name": name }))).await
 }
 
 pub async fn create_channel(guild: &str, name: &str, kind: i16) -> Result<Channel, String> {
     send(
         "POST",
         &format!("/api/v1/guilds/{guild}/channels"),
-        Some(serde_json::json!({ "name": name, "kind": kind })),
+        Some(json!({ "name": name, "kind": kind })),
     )
     .await
+}
+
+pub async fn update_channel(channel: &str, patch: Value) -> Result<Channel, String> {
+    send("PATCH", &format!("/api/v1/channels/{channel}"), Some(patch)).await
 }
 
 pub async fn create_invite(guild: &str) -> Result<InviteResponse, String> {
     send(
         "POST",
         &format!("/api/v1/guilds/{guild}/invites"),
-        Some(serde_json::json!({})),
+        Some(json!({})),
     )
     .await
 }
 
 pub async fn join_invite(code: &str) -> Result<(), String> {
-    let _: serde_json::Value = send(
-        "POST",
-        &format!("/api/v1/invites/{code}"),
-        Some(serde_json::json!({})),
-    )
-    .await?;
-    Ok(())
+    send_empty("POST", &format!("/api/v1/invites/{code}"), Some(json!({}))).await
 }
+
+// ------------------------------------------------------------- Nachrichten
+
+pub async fn messages(channel: &str, before: Option<&str>) -> Result<Vec<Message>, String> {
+    let path = match before {
+        Some(before) => format!("/api/v1/channels/{channel}/messages?limit=50&before={before}"),
+        None => format!("/api/v1/channels/{channel}/messages?limit=50"),
+    };
+    send("GET", &path, None).await
+}
+
+pub async fn delete_message(channel: &str, message: &str) -> Result<(), String> {
+    send_empty(
+        "DELETE",
+        &format!("/api/v1/channels/{channel}/messages/{message}"),
+        None,
+    )
+    .await
+}
+
+pub async fn ack(channel: &str, message: &str) -> Result<(), String> {
+    send_empty(
+        "POST",
+        &format!("/api/v1/channels/{channel}/ack"),
+        Some(json!({ "message_id": message })),
+    )
+    .await
+}
+
+pub async fn pins(channel: &str) -> Result<Vec<Message>, String> {
+    send("GET", &format!("/api/v1/channels/{channel}/pins"), None).await
+}
+
+pub async fn set_pin(channel: &str, message: &str, pinned: bool) -> Result<(), String> {
+    let path = format!("/api/v1/channels/{channel}/pins/{message}");
+    if pinned {
+        send_empty("PUT", &path, Some(json!({}))).await
+    } else {
+        send_empty("DELETE", &path, None).await
+    }
+}
+
+pub async fn create_thread(channel: &str, message: &str, name: &str) -> Result<Channel, String> {
+    send(
+        "POST",
+        &format!("/api/v1/channels/{channel}/messages/{message}/threads"),
+        Some(json!({ "name": name })),
+    )
+    .await
+}
+
+// -------------------------------------------------------------- Moderation
+
+pub async fn kick(guild: &str, user: &str, reason: &str) -> Result<(), String> {
+    send_empty(
+        "POST",
+        &format!("/api/v1/guilds/{guild}/members/{user}/kick"),
+        Some(json!({ "reason": reason })),
+    )
+    .await
+}
+
+pub async fn ban(guild: &str, user: &str, reason: &str) -> Result<(), String> {
+    send_empty(
+        "PUT",
+        &format!("/api/v1/guilds/{guild}/bans/{user}"),
+        Some(json!({ "reason": reason })),
+    )
+    .await
+}
+
+pub async fn unban(guild: &str, user: &str) -> Result<(), String> {
+    send_empty(
+        "DELETE",
+        &format!("/api/v1/guilds/{guild}/bans/{user}"),
+        None,
+    )
+    .await
+}
+
+pub async fn bans(guild: &str) -> Result<Vec<Ban>, String> {
+    send("GET", &format!("/api/v1/guilds/{guild}/bans"), None).await
+}
+
+pub async fn timeout(guild: &str, user: &str, seconds: i64) -> Result<(), String> {
+    send_empty(
+        "PUT",
+        &format!("/api/v1/guilds/{guild}/members/{user}/timeout"),
+        Some(json!({ "seconds": seconds })),
+    )
+    .await
+}
+
+pub async fn audit_log(guild: &str) -> Result<Vec<AuditEntry>, String> {
+    send("GET", &format!("/api/v1/guilds/{guild}/audit-log"), None).await
+}
+
+pub async fn create_role(guild: &str, name: &str) -> Result<Role, String> {
+    send(
+        "POST",
+        &format!("/api/v1/guilds/{guild}/roles"),
+        Some(json!({ "name": name, "permissions": 0, "position": 1 })),
+    )
+    .await
+}
+
+pub async fn update_role(guild: &str, role: &str, patch: Value) -> Result<Role, String> {
+    send(
+        "PATCH",
+        &format!("/api/v1/guilds/{guild}/roles/{role}"),
+        Some(patch),
+    )
+    .await
+}
+
+pub async fn delete_role(guild: &str, role: &str) -> Result<(), String> {
+    send_empty(
+        "DELETE",
+        &format!("/api/v1/guilds/{guild}/roles/{role}"),
+        None,
+    )
+    .await
+}
+
+pub async fn set_member_role(guild: &str, user: &str, role: &str, on: bool) -> Result<(), String> {
+    let path = format!("/api/v1/guilds/{guild}/members/{user}/roles/{role}");
+    if on {
+        send_empty("PUT", &path, Some(json!({}))).await
+    } else {
+        send_empty("DELETE", &path, None).await
+    }
+}
+
+// ------------------------------------------------------------------- Voice
 
 pub async fn voice_join(channel: &str, sdp: &str) -> Result<VoiceJoinResponse, String> {
     send(
         "POST",
         &format!("/api/v1/channels/{channel}/voice/join"),
-        Some(serde_json::json!({ "sdp": sdp })),
+        Some(json!({ "sdp": sdp })),
     )
     .await
 }
@@ -178,7 +317,7 @@ pub async fn voice_leave(channel: &str) -> Result<(), String> {
     send_empty(
         "POST",
         &format!("/api/v1/channels/{channel}/voice/leave"),
-        Some(serde_json::json!({})),
+        Some(json!({})),
     )
     .await
 }
@@ -188,6 +327,20 @@ pub async fn voice_participants(channel: &str) -> Result<Vec<VoiceParticipant>, 
         "GET",
         &format!("/api/v1/channels/{channel}/voice/participants"),
         None,
+    )
+    .await
+}
+
+pub async fn voice_state(
+    channel: &str,
+    muted: bool,
+    deafened: bool,
+    screen: bool,
+) -> Result<(), String> {
+    send_empty(
+        "POST",
+        &format!("/api/v1/channels/{channel}/voice/state"),
+        Some(json!({ "muted": muted, "deafened": deafened, "screen": screen })),
     )
     .await
 }

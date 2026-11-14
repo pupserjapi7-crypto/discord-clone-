@@ -14,3 +14,7 @@
 /desktop/src-tauri/target/
 /desktop/node_modules/
 /release/
+
+# Lokale Vorschau-Konfiguration (Pfade/Ports dieser Maschine)
+/.claude/launch.json
+/.claude/settings.local.json

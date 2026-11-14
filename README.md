@@ -4,68 +4,60 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 
 **Prioritäten:** Voice-Latenz → Performance/Ressourcen → Design/UX → Features → Sicherheit (immer Pflicht).
 
-## Status v0.2.2
+## Status v0.4.0
 
-| Phase | Zustand |
+| Bereich | Zustand |
 |---|---|
-| M0: Architektur + Rust-only-UI | **fertig** — Dioxus 0.7 (Web-WASM + Tauri-Shell), kein Node/npm |
-| M1: Gateway + Auth + Text-Chat | **live** auf `https://85-215-175-202.sslip.io`; 1.000 WS ohne Fehler, Dispatch-p99 3,3 ms |
-| M2: Voice (str0m-SFU) | **implementiert** — ICE/DTLS im Zwei-Client-Test verbunden |
-| M3: UI | **implementiert** — neues Clean-Design (Dark/Light), Mitgliederpanel, Command Palette, gruppierte Nachrichten, Voice-Dock mit Mute/Deafen/Screenshare |
-| M4: Screenshare 1080p60 | **Code + synthetischer Video-Pfad verifiziert**; echte Display-Aufnahme im Automationsbrowser nicht testbar, Threads/Moderation/Bot-API offen |
-| M5: optionale Features | nicht begonnen |
+| Text-Chat, Auth, Gateway | **live** (0.2.2 auf dem VPS); Integrationstests gegen echten Server, Dispatch-p99 lokal 0,98 ms (120 WS) |
+| Rechte | **neu abgesichert** — Nicht-Mitglieder/Gebannte haben keine Rechte mehr (Lücke bis 0.3.0, s. `STATUS.md`) |
+| Moderation | **fertig** — Rollen & Kanal-Overrides, Kick, Bann, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log mit UI |
+| Threads | **fertig** — aus Nachricht starten, Seitenleiste, Archivieren, Ungelesen-Stand |
+| Bot-API | **fertig** — `nb_`-Tokens für REST + Gateway, Doku `docs/04-bot-api.md`, Beispiel `examples/echo-bot` |
+| Web-UI | **neues Nova-Design** — Tokens `--nv-*`, Dark/Light/System, Command Palette, Voice-Grid, Einstellungen, Galerie `/dev/gallery` |
+| Voice | Verbindung, Sprecher-Ring, Lautstärke pro Person, Push-to-Talk, Ping, Reconnect, `voice_state_update` statt Polling; **Ende-zu-Ende-Latenz noch nicht gemessen** |
+| Screenshare | 1080p60, max. 8 Streams pro Raum; echte Display-Aufnahme nur manuell testbar |
+| Desktop | Tauri-2-Hülle + nativer iced-Client mit In-App-Update |
+| Offen | Uploads (`BlobStore`), Tauri-Tray/Benachrichtigungen, Simulcast-Schichten, Latenzmessung – siehe `STATUS.md` |
+
+Screenshots: [`docs/screenshots/`](docs/screenshots/).
 
 ## Dokumentation
 
-- [`docs/01-architecture.md`](docs/01-architecture.md) — Topologie, Protokoll, RAM-/Bandbreiten-Budget, Build-Pipeline, Deployment
-- [`docs/02-design.md`](docs/02-design.md) — Farben, Typografie, Layout, Komponenten, Frontend-Budget
-- [`docs/03-roadmap.md`](docs/03-roadmap.md) — Meilensteine, Gates, Umsetzungsstand
-- [`docs/DECISIONS.md`](docs/DECISIONS.md) — getroffene Architektur- und Designentscheidungen
+- [`CLAUDE.md`](CLAUDE.md) — Regeln, Crates, Befehle; Skills unter `.claude/skills/`
+- [`docs/01-architecture.md`](docs/01-architecture.md) — Topologie, Protokoll, RAM-/Bandbreiten-Budget
+- [`docs/02-design.md`](docs/02-design.md) — Nova-Designsystem
+- [`docs/03-roadmap.md`](docs/03-roadmap.md) — Meilensteine und Messwerte
+- [`docs/04-bot-api.md`](docs/04-bot-api.md) — Bot-API
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — Entscheidungen
 - [`STATUS.md`](STATUS.md) — was fertig ist, was fehlt, bekannte Probleme
-- [`docs/06-vps-production.md`](docs/06-vps-production.md) — Betrieb auf dem VPS
-- [`docs/07-desktop-app.md`](docs/07-desktop-app.md) — Tauri-Shell und Installer
+- [`docs/06-vps-production.md`](docs/06-vps-production.md) — Betrieb und Update auf dem VPS
+- [`docs/07-desktop-app.md`](docs/07-desktop-app.md) — Desktop-Apps und Installer
 
 ## Architektur in Kürze
 
-- **Ein Binary:** `nova serve` startet Axum-HTTP, Gateway und SFU; Optionen über `/etc/nova/nova.env`.
-- **PostgreSQL 17** für alles Persistente inkl. Volltextsuche (`tsvector` + GIN). Kein Redis, kein Meilisearch, kein MinIO, kein Docker.
-- **Presence, Sessions, Rate-Limits** im Prozess; **Uploads** content-addressed hinter `BlobStore`.
-- **Frontend:** Dioxus 0.7 (RSX), `dx build --web` → WASM, per `rust-embed` im Server-Binary. Dieselbe UI läuft in der Tauri-2-Desktop-Shell.
-- **Voice:** eigener str0m-SFU, ICE-lite, UDP 40000–40100, Opus 48 kHz/20 ms, RTP-Fanout ohne Mixing/Transcoding; Screenshare als 1080p60-Schicht.
+- **Ein Binary:** `nova serve` startet Axum-HTTP, Gateway und SFU; Optionen über `/etc/nova/nova.env`; Migrationen laufen beim Start.
+- **PostgreSQL 17** für alles Persistente. Kein Redis, kein Docker. Volltextsuche ist noch nicht gebaut (die Palette sucht in geladenen Nachrichten).
+- **Presence, Sessions, Rate-Limits** im Prozess.
+- **Frontend:** Dioxus 0.7 (RSX) → WASM, per `rust-embed` im Server-Binary; dieselbe UI in der Tauri-2-Hülle. Zusätzlich nativer Client `crates/client-native`.
+- **Voice:** eigener str0m-SFU, ICE-lite, UDP 40000–40100, Opus, RTP-Fanout ohne Mixing/Transcoding.
 
 ## Voraussetzungen
 
 - Rust **1.89+** (siehe `rust-toolchain.toml`), Target `wasm32-unknown-unknown`
 - Dioxus-CLI **0.7.0**: `cargo install dioxus-cli --version 0.7.0`
-- PostgreSQL 17 für lokale Entwicklung
-- Für Tauri-Installer: MSVC/WebView2 (Windows) bzw. WebKitGTK (Linux)
+- PostgreSQL 17 (die sqlx-Makros prüfen Queries gegen die echte DB: `DATABASE_URL` setzen, `nova migrate`)
 - **Kein** Node, npm, pnpm oder Bun
 
-## Bauen
+## Bauen und prüfen
 
 ```bash
-# 1. Web-UI (erzeugt crates/ui/dist)
-cd crates/ui
-dx build --web --release --features web
-cd ../..
-rm -rf crates/ui/dist
-mkdir -p crates/ui/dist
-cp -a target/dx/nova-ui/release/web/public/. crates/ui/dist/
-cp crates/ui/assets/app.css crates/ui/dist/assets/app.css
-
-# 2. Server (Debug lokal, Release für Deployment)
-cargo build -p nova
-cargo build --release --target x86_64-unknown-linux-musl -p nova
-
-# 3. Prüfungen
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo clippy -p nova-ui --target wasm32-unknown-unknown --features web -- -D warnings
-cargo test --workspace
+cargo xtask ui      # Web-UI bauen → crates/ui/dist (+ app.css)
+cargo xtask build   # ui + Server (release)
+cargo xtask check   # fmt, clippy (Workspace + WASM), Tests
+cargo xtask gallery # Komponenten-Galerie unter /dev/gallery (nur lokal!)
 ```
 
-Der Server bettet `crates/ui/dist` ein; nach UI-Änderungen muss `crates/nova/src/main.rs` neu kompiliert werden (`touch` hilft gegen den `rust-embed`-Cache).
-
+Release für den VPS: `cargo build --release --target x86_64-unknown-linux-musl -p nova`.
 ## Desktop-Installer
 
 ```powershell

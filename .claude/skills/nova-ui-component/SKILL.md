@@ -56,5 +56,9 @@ pub fn Thing(props: ThingProps) -> Element {
 - Tastatur: alles per Tab erreichbar; Esc schließt Overlays; Enter löst die
   Hauptaktion aus.
 - Status nie nur über Farbe (Punkt + Text oder `aria-label`).
+- Async aus Dialogen/Palette: `spawn_forever` statt `spawn`, wenn der Ablauf
+  den Dialog schließt – sonst bricht die Aufgabe mit dem Dialog ab.
+- Zustand nur über die Signale im `Store` (`crates/ui/src/store.rs`); nie den
+  ganzen Store klonen, nur lesen, was die Komponente braucht.
 - Nach der Änderung: Galerie-Eintrag ergänzen, `nova-design-system`-Checkliste,
   dann `nova-ui-build`.

@@ -472,6 +472,17 @@ async fn messages_create_list_pin_delete_and_threads() {
             .as_array()
             .is_some_and(|rows| !rows.is_empty())
     );
+    // Alle IDs – auch in Listen wie `role_ids` – sind Strings (JS-sicher).
+    let owner_row = detail["members"]
+        .as_array()
+        .and_then(|members| members.iter().find(|m| m["user_id"] == owner.id.as_str()))
+        .expect("owner in members");
+    assert!(
+        owner_row["role_ids"]
+            .as_array()
+            .is_some_and(|ids| !ids.is_empty() && ids.iter().all(Value::is_string)),
+        "{owner_row}"
+    );
 
     // Fremde Nachricht löschen: nur mit MANAGE_MESSAGES (Owner ja).
     let (status, own) = owner

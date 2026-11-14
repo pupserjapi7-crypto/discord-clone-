@@ -1,155 +1,77 @@
 # Project Nova — Designsprache
 
-**Status:** umgesetzt in `crates/ui/assets/app.css` und `crates/ui/src/main.rs` (v0.2.2).
-Ruhige Flächen, eine Akzentfarbe, Inhalt zuerst. Keine Verläufe, Glows,
-Backdrop-Blur oder dekorativen Schatten.
+**Status:** umgesetzt in v0.4.0 (`crates/ui/assets/app.css`, `crates/ui/src/views`).
+Die verbindliche Kurzfassung mit Checkliste steht im Skill
+[`.claude/skills/nova-design-system/SKILL.md`](../.claude/skills/nova-design-system/SKILL.md).
 
----
+## Leitidee
 
-## 1. Leitidee
+Ruhiges Profi-Werkzeug (Richtung Linear/Arc/Raycast) für Gaming-Gruppen –
+hochwertig statt bunt und **nicht** Discord in anderen Farben. Flache Flächen,
+Ebenen nur über Helligkeitsstufen, ein Akzent (Nova-Violett `#7C6CFF`),
+kein Glow, keine Verläufe, kein Blur auf Flächen.
 
-Nova ist ein Werkzeug, keine Bühne. Die drei Flächen (Server-Leiste, Kanäle,
-Chat) liegen nah beieinander; Struktur entsteht durch dünne Linien und
-Typografie, nicht durch Farbe oder Tiefe. Ein einziges ruhiges Violett-Blau
-markiert Interaktion. Semantische Farben erscheinen nur als Status.
+## Tokens
 
-Dark Mode ist der Standard. Light Mode folgt automatisch
-`prefers-color-scheme`; es gibt keinen manuellen Theme-Schalter.
+Alle Farben, Abstände, Radien und Zeiten sind CSS-Variablen mit Präfix `--nv-`
+in `:root`. Light verwendet dieselben Namen (`data-theme="light"` oder
+System-Einstellung). Im Komponentencode und außerhalb der Token-Blöcke gibt es
+keine Hex-Werte.
 
----
-
-## 2. Tokens
-
-Alle Werte liegen in `crates/ui/assets/app.css`. Komponenten verwenden
-ausschließlich Variablen, keine Hex-Werte.
-
-```css
-:root {
-    --bg-rail: #0f1115;      /* Server-Leiste */
-    --bg-sidebar: #13161c;   /* Kanäle / Mitglieder */
-    --bg-main: #171b22;      /* Chat */
-    --bg-raised: #1d222b;    /* Inputs, Karten, Voice-Dock */
-    --border: rgba(255, 255, 255, 0.07);
-    --text: #e8ebf1;
-    --text-muted: #a0a8b7;
-    --text-faint: #7d8797;
-    --accent: #7b86f8;       /* genau eine Akzentfarbe */
-    --green: #49b98a;
-    --yellow: #d0a44c;
-    --red: #df737d;
-    --gray: #78818f;
-    --radius-sm: 6px;
-    --radius-md: 10px;
-    --radius-lg: 16px;
-}
-```
-
-Light Mode überschreibt dieselben Variablen in
-`@media (prefers-color-scheme: light)` (weiße Hauptfläche, dunkle Schrift,
-Akzent `#4f5bd5`).
-
-Regeln:
-
-- Drei Hintergrundstufen plus `--bg-raised` für interaktive Flächen.
-- Drei Textstufen; Fließtext erreicht WCAG AA auf seiner Fläche.
-- Status nie nur über Farbe: Punkt plus Text/`aria-label`.
-- Kein Hex-Wert und kein `background: linear-gradient(...)` in Komponenten.
-- Fokus: `outline: 2px solid var(--accent)` mit 2 px Offset.
-
----
-
-## 3. Typografie
-
-- Familie: `Inter` falls lokal installiert, sonst `Segoe UI Variable Text`,
-  `Segoe UI`, `system-ui`. Keine Webfont-Anfrage an fremde Server.
-- Skala: 11 / 12 / 13,5 / 14 / 15 / 19 / 22 / 24 px.
-- Chat 14 px, Zeilenhöhe 1,45; Zeitstempel 10,5–11 px,
-  `font-variant-numeric: tabular-nums`.
-- Gewichte: 400 Regular, 600 Semibold. Keine 700+-Ausnahmen außer Wortmarke.
-- Labels in Großbuchstaben nur für Gruppenüberschriften, nie für Fließtext.
-
----
-
-## 4. Layout und Abstände
-
-```
-┌──────┬──────────────┬──────────────────────────────┬──────────────┐
-│ 68   │ 248          │ Chat                          │ 240          │
-│ Rail │ Kanäle       │ Header / Nachrichten / Composer│ Mitglieder   │
-└──────┴──────────────┴──────────────────────────────┴──────────────┘
-```
-
-- 4-px-Raster; Radius 6 / 10 / 16 px.
-- Server-Icons 42 px, rund; aktiv abgerundetes Quadrat plus Marker links.
-- Avatare rund, 32 px im Chat, 26 px in Listen.
-- Mitgliederpanel ab 1024 px sichtbar und per Button umschaltbar; darunter
-  ausgeblendet, damit der Chat lesbar bleibt. (Die ursprüngliche Vorgabe
-  „unter ca. 900 px“ wird bewusst etwas früher gezogen.)
-- Unter 900 px: Rail 64 px, Kanäle 232 px, Mitglieder aus.
-- Unter 700 px: eine Spalte; Kanäle als Drawer mit Scrim, Header mit
-  Menü-Button.
-- Composer bleibt am unteren Rand; Voice-Dock sitzt direkt darüber.
-
----
-
-## 5. Komponenten
-
-| Komponente | Zustände / Verhalten |
+| Gruppe | Tokens |
 |---|---|
-| Server-Icon | normal, Hover, aktiv mit Marker |
-| Kanalgruppe | offen/geschlossen, `aria-expanded`, Chevron |
-| Kanal | normal, Hover, aktiv, Live-Punkt, Voice-Avatare |
-| Nachricht | normal, gruppiert (gleicher Autor, gleiche Minute), Hover |
-| Composer | leer/gefüllt, Fokus, deaktivierter Senden-Button |
-| Voice-Dock | verbunden/bereit, Mute, Deafen, Screenshare, Verlassen |
-| Mitgliederpanel | Online/Offline, Statuspunkt mit Label, einklappbar |
-| Command Palette | Strg/Cmd+K, Esc, Tippen, Enter, Aktionen |
-| Modals | Fokus, Backdrop, Abbrechen/primäre Aktion |
-| Toast | Fehler mit Schließen-Button |
-| Auth | Login/Registrierung, Busy-Zustand, Fehlertext |
+| Flächen | `--nv-bg-0` Server-Leiste · `-1` Kanäle/Mitglieder · `-2` Chat · `-3` Karten/Eingaben/Hover · `-4` aktiv/Popover |
+| Linien | `--nv-line`, `--nv-line-strong` |
+| Text | `--nv-text-1/2/3` |
+| Akzent | `--nv-accent`, `-hover`, `-soft` |
+| Status | `--nv-online`, `--nv-idle`, `--nv-danger`, `--nv-offline`, `--nv-speaking` |
+| Typo | `--nv-fs-12 … --nv-fs-28` (mit `--nv-scale` 90–125 %) |
+| Raster | `--nv-s-1 … --nv-s-12` (4, 8, 12, 16, 20, 24, 32, 48) |
+| Radius | 6 Badges · 10 Controls · 14 Karten · 999 Pills |
+| Motion | `--nv-ease` = `cubic-bezier(0.2, 0, 0, 1)`, 120/160 ms, nur `opacity`/`transform` |
 
-Icons sind Inline-SVG (`Icon`-Komponente in `main.rs`), keine Icon-Fonts und
-keine externen Assets.
+## Layout
 
----
+Server-Leiste 72 · Kanäle 248 · Chat flexibel · Mitglieder 248 (Thread-Spalte
+380) · Header 48. Unter 1100 px liegen Mitglieder/Thread als Panel über dem
+Chat und starten geschlossen; unter 760 px werden Leiste und Kanäle zum Drawer.
 
-## 6. Bewegung
+## Signature-Details
 
-- 150 ms, `ease-out`; nur Hintergrund, Farbe, Transform und Opazität.
-- Kein Scroll- oder Voice-Animationseffekt.
-- `@media (prefers-reduced-motion: reduce)` setzt Übergänge und Animationen
-  auf 0,01 ms.
+- Server-Icons 48 px rund → Radius 14 bei Hover/Auswahl, Pill-Marker links
+  (8 / 20 / 36 px für ungelesen / Hover / ausgewählt).
+- Sprecher-Ring 2 px `--nv-speaking`, eingeblendet, nie pulsierend.
+- Voice-Grid mit Kacheln (`--nv-bg-3`, Radius 14), Screenshare groß mit Leiste
+  darunter, Platzhalter solange das Bild lädt.
+- Voice-Dock: schwebende Pill unten mittig **nur in der Voice-Ansicht**; in
+  Textkanälen zeigt die „Sprache verbunden“-Leiste über dem Nutzerpanel Kanal,
+  Ping und Auflegen (sonst verdeckt das Dock den Composer).
+- Ping mit Farbpunkt: grün < 60 ms, gelb < 120 ms, sonst rot – plus Zahl.
+- Command Palette 560 px: Kanäle, Personen, Nachrichten, Aktionen; ↑/↓/Enter.
+- Erwähnungen: `--nv-accent-soft` + 2-px-Streifen; „Neu“-Trenner in `--nv-danger`.
+- Composer: Enter sendet, Umschalt+Enter neue Zeile, wächst bis 40 % Höhe,
+  Tipp-Anzeige darunter, Emoji-Auswahl rechts.
+- Icons: eine Line-Familie im Lucide-Stil, 1,75 px Strich, Inline-SVG.
 
----
+## Barrierefreiheit
 
-## 7. Barrierefreiheit
+Tastatur überall (Dialoge fokussieren ihr erstes Feld, Esc schließt),
+Fokusring 2 px Akzent mit 2 px Abstand, Klickflächen ≥ 32 px (Voice 40 px),
+Status immer Punkt **und** Text/`aria-label`, Nachrichtenliste `role="log"` mit
+`aria-live`, `prefers-reduced-motion` → 0 ms.
 
-- Vollständige Tab-Reihenfolge, sichtbarer Fokusring, Mindesthöhe 32 px.
-- `Ctrl/Cmd+K` öffnet die Palette global; `Esc` schließt sie.
-- Icon-Buttons haben `aria-label`; Mute/Deafen/Screenshare nutzen
-  `aria-pressed`.
-- Nachrichtenliste ist `role="log"` mit `aria-live="polite"`.
-- Status wird als Punkt **und** Text (`Online`/`Offline`) ausgegeben.
-- Farbe ist nie der einzige Bedeutungsträger.
+## Galerie und Screenshots
 
----
+`cargo xtask gallery` baut die UI mit `/dev/gallery`: alle Bausteine in allen
+Zuständen nebeneinander in Dark und Light, sowie ganze Bildschirme mit
+Testdaten (`?screen=chat|thread|voice|screenshare|palette|settings|moderation|member|login|onboarding`,
+`&theme=dark|light`). Daraus stammen die Bilder in
+[`docs/screenshots/`](screenshots/).
 
-## 8. Budget
+## Budget (gemessen 14.11.2026)
 
-| Posten | Ziel |
-|---|---|
-| WASM (unkomprimiert) | < 1 MB; aktuell ca. 763 KB |
-| Handgeschriebenes CSS | eine Datei, ca. 25 KB |
-| Externe Requests | 0 (keine Fonts/CDNs) |
-| Handgeschriebenes JS | 0 |
-| Interaktion | sofort; Palette arbeitet rein im Speicher |
-
----
-
-## 9. Bekannte Design-Lücken
-
-- Ungelesen-Badges und Reply-/Reaktionsdarstellung sind noch nicht an die
-  vorhandenen Daten angebunden.
-- Ein echter Ping-Wert wird im Voice-Dock noch nicht angezeigt.
-- Die Sprecher-Hervorhebung nutzt noch keinen Audiopegel; sie ist für einen
-  späteren RTP-Level-Ausbau vorbereitet.
+| Posten | Ziel | Ist |
+|---|---|---|
+| WASM gzip | < 2 MB | 501 KB (1.272 KB roh) |
+| Externe Requests (Fonts/CDNs) | 0 | 0 |
+| Handgeschriebenes JS | 0 | 0 |

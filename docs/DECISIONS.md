@@ -4,6 +4,44 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-14 — Web-UI: Signale statt Snapshot, Abläufe aus Dialogen mit `spawn_forever`
+
+**Entscheidung:** Der UI-Zustand ist ein `Store` aus einzelnen Signalen
+(`crates/ui/src/store.rs`) statt eines großen `SessionState`, der bei jedem
+Render geklont wurde. Abläufe, die aus Dialogen oder der Palette starten und
+den Dialog schließen, laufen über `spawn_forever`.
+
+**Warum:** Eine neue Nachricht zeichnet nur noch die Nachrichtenliste neu. Mit
+`spawn` gehört eine Aufgabe dem Dialog; schließt er sich, bricht der Rest ab
+(gefunden: Thread öffnete sich nach dem Anlegen nicht, Löschen hätte abbrechen
+können).
+
+## 2026-11-14 — Voice-Dock nur in der Voice-Ansicht
+
+**Entscheidung:** Die schwebende Dock-Pill erscheint nur, wenn ein
+Sprachkanal geöffnet ist. In Textkanälen übernimmt die „Sprache
+verbunden“-Leiste in der Kanalspalte (Kanal, Ping, Auflegen).
+
+**Warum:** Unten mittig verdeckte die Pill im Textkanal den Composer.
+
+## 2026-11-14 — Schrift: Inter nur, wenn installiert
+
+**Entscheidung:** `Inter` steht vorn im Font-Stack, wird aber nicht
+eingebettet; Fallback `system-ui`. JetBrains Mono ebenso.
+
+**Warum:** Eine eingebettete Variable-Font kostet 300+ KB und müsste aus einer
+externen Quelle geladen werden; das Budget gilt der Voice-Latenz und dem
+WASM-Bundle. Nachrüstbar über `crates/ui/assets/` + `@font-face`.
+
+## 2026-11-14 — Uploads auf später verschoben
+
+**Entscheidung:** Der `BlobStore` und die Upload-Endpunkte sind nicht Teil von
+0.4.0. Der Composer hat deshalb (noch) keinen „+“-Knopf.
+
+**Warum:** Lieber vollständig fertige Moderation, Threads und Bot-API als einen
+halben Upload-Pfad (Re-Encoding, Größenlimits, Rechte beim Download). Die
+README behauptete Uploads bereits; das ist korrigiert.
+
 ## 2026-11-14 — Timeout als Rechte-Entzug statt eigener Prüfung
 
 **Entscheidung:** Ein laufender Timeout entfernt in `effective_permissions`

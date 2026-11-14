@@ -2,6 +2,33 @@
 
 Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erfahrenen Rust-Entwickler** inklusive Tests und Doku. Jeder Meilenstein endet mit Code, Tests, Messung und kurzem Entscheidungsprotokoll. Kein Meilenstein beginnt, bevor der vorherige sein Gate bestanden hat.
 
+## Messwerte v0.4.0 (14.11.2026, lokal, Windows-Build ohne mimalloc)
+
+| Budget | Ziel | Gemessen |
+|---|---|---|
+| Server-RAM Leerlauf | < 150 MB | 11,5 MB Working Set |
+| Server-RAM mit 120 WS + 10 msg/s | – | 22,7 MB |
+| Gateway-Dispatch p99 | ≤ 5 ms | **0,98 ms** (p50 0,08 ms), 120 Clients, 0 Gaps |
+| Nachrichten-Pipeline p99 (inkl. DB) | – | 14,0 ms |
+| WASM gzip | < 2 MB | 501 KB |
+| Nativer Client | – | ~22–30 MB RAM, erste Ansicht ~10 ms |
+| Voice Ende-zu-Ende | < 100 ms | **nicht gemessen** – braucht zwei Geräte mit Mikrofon (Click-Track-Harness offen) |
+| SFU-Weiterleitung pro Paket | < 5 ms | **nicht gemessen** |
+| 30 Nutzer inkl. Voice | < 900 MB | **nicht gemessen** |
+
+Die Werte vom VPS (1.000 WS, Dispatch-p99 3,3 ms) stehen in
+`docs/06-vps-production.md`.
+
+## Umsetzungsstand v0.4.0
+
+| Meilenstein | Stand |
+|---|---|
+| **M3 UI** | ✅ Nova-Design (Tokens `--nv-*`), Ungelesen-Punkte, „Neu“-Trenner, Sprecher-Ring, Ping, Galerie |
+| **M4 Moderation** | ✅ Rollen/Overrides, Kick/Bann/Timeout, Slowmode, Pins, Audit-Log |
+| **M4 Threads** | ✅ aus Nachrichten, Archiv; Forum-Kanäle offen |
+| **M4 Bot-API** | ✅ Tokens, REST + Gateway, Referenz-Bot; Webhooks/Slash-Commands offen |
+| **M4 Screenshare** | 🟡 max. 8 Streams; Simulcast-Layer-Auswahl offen |
+
 ## Umsetzungsstand v0.2.2 (Rust-only)
 
 | Meilenstein | Stand |
