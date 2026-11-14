@@ -11,6 +11,8 @@ members = [
   "crates/loadtest",
   "crates/nova",
   "crates/client-native",
+  "xtask",
+  "examples/echo-bot",
 ]
 
 [workspace.package]

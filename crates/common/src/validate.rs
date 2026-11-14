@@ -102,6 +102,58 @@ pub fn validate_emoji(emoji: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+pub const MAX_REASON_LEN: usize = 512;
+pub const MAX_ROLE_NAME_LEN: usize = 32;
+pub const MAX_TOPIC_LEN: usize = 256;
+/// Sechs Stunden, wie im Schema (`channels.slowmode_secs`).
+pub const MAX_SLOWMODE_SECS: i32 = 21_600;
+/// 28 Tage.
+pub const MAX_TIMEOUT_SECS: i64 = 28 * 24 * 3600;
+
+/// Optionaler Moderationsgrund: höchstens 512 Zeichen, keine Steuerzeichen.
+pub fn validate_reason(reason: &str) -> Result<(), &'static str> {
+    if reason.chars().count() > MAX_REASON_LEN {
+        return Err("reason is too long");
+    }
+    if reason.chars().any(|c| c.is_control() && c != '\n') {
+        return Err("reason contains control characters");
+    }
+    Ok(())
+}
+
+pub fn validate_role_name(name: &str) -> Result<(), &'static str> {
+    let trimmed = name.trim();
+    if !(1..=MAX_ROLE_NAME_LEN).contains(&trimmed.chars().count()) {
+        return Err("role name must be 1-32 characters");
+    }
+    if trimmed == "@everyone" || trimmed.chars().any(|c| c.is_control()) {
+        return Err("invalid role name");
+    }
+    Ok(())
+}
+
+pub fn validate_topic(topic: &str) -> Result<(), &'static str> {
+    if topic.chars().count() > MAX_TOPIC_LEN {
+        return Err("topic is too long");
+    }
+    if topic.chars().any(|c| c.is_control()) {
+        return Err("topic contains control characters");
+    }
+    Ok(())
+}
+
+/// Thread-Namen dürfen anders als Kanalnamen Leerzeichen enthalten.
+pub fn validate_thread_name(name: &str) -> Result<(), &'static str> {
+    let trimmed = name.trim();
+    if !(1..=64).contains(&trimmed.chars().count()) {
+        return Err("thread name must be 1-64 characters");
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err("thread name contains control characters");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +187,17 @@ mod tests {
         assert!(validate_message_content(&"x".repeat(8001), 8000).is_err());
         assert!(validate_message_content("a\u{0}b", 8000).is_err());
         assert!(validate_message_content("line\nbreak\tok", 8000).is_ok());
+    }
+
+    #[test]
+    fn moderation_inputs() {
+        assert!(validate_reason("Spam").is_ok());
+        assert!(validate_reason(&"x".repeat(513)).is_err());
+        assert!(validate_role_name("Moderator").is_ok());
+        assert!(validate_role_name("@everyone").is_err());
+        assert!(validate_role_name("").is_err());
+        assert!(validate_thread_name("Frage zu Patch 1.2").is_ok());
+        assert!(validate_topic(&"t".repeat(257)).is_err());
     }
 
     #[test]

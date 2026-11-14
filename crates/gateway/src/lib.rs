@@ -34,10 +34,14 @@ use nova_common::{
         self, ClientOp, Event, MAX_FRAME_BYTES, MessageView, OP_ACK, OP_DISPATCH, OP_ERROR,
         OP_HELLO, OP_HELLO_OK, OP_INVALID_SESSION, OP_RESUMED, OP_RESYNC, ServerOp, UserPublic,
     },
-    tokens::TokenStore,
+    tokens::{self, TokenStore},
     validate,
 };
-use nova_db::{Db, PermCache, models::MessageRow, views};
+use nova_db::{
+    Db, PermCache,
+    models::{CHANNEL_THREAD, MessageRow},
+    views,
+};
 use tokio::sync::{Notify, mpsc};
 use tracing::{debug, warn};
 
@@ -147,6 +151,16 @@ impl Session {
     }
 }
 
+/// Was das Gateway pro Kanal für Slowmode und archivierte Threads braucht.
+#[derive(Debug, Clone, Copy)]
+struct ChannelInfo {
+    slowmode_secs: i32,
+    archived: bool,
+    fetched: Instant,
+}
+
+const CHANNEL_INFO_TTL: Duration = Duration::from_secs(30);
+
 /// Shared gateway state. Cloned as `Arc` into every connection task.
 pub struct Gateway {
     db: Db,
@@ -159,6 +173,9 @@ pub struct Gateway {
     channels: DashMap<i64, HashSet<String>>,
     guilds: DashMap<i64, HashSet<String>>,
     channel_guilds: DashMap<i64, i64>,
+    channel_info: DashMap<i64, ChannelInfo>,
+    /// Letzte Nachricht pro (Kanal, Nutzer) für den Slowmode.
+    slowmode_last: DashMap<(i64, i64), Instant>,
 }
 
 impl Gateway {
@@ -180,7 +197,142 @@ impl Gateway {
             channels: DashMap::new(),
             guilds: DashMap::new(),
             channel_guilds: DashMap::new(),
+            channel_info: DashMap::new(),
+            slowmode_last: DashMap::new(),
         })
+    }
+
+    // ------------------------------------------------------------------
+    // Schnittstelle für die REST-API: erst DB schreiben, dann verteilen.
+    // ------------------------------------------------------------------
+
+    /// Event an alle Abonnenten eines Kanals.
+    pub fn publish_channel(&self, channel_id: i64, event: &Event) {
+        self.dispatch_channel(channel_id, event);
+    }
+
+    /// Event an alle verbundenen Mitglieder einer Guild.
+    pub fn publish_guild(&self, guild_id: i64, event: &Event) {
+        self.dispatch_guild(guild_id, event, None);
+    }
+
+    /// Rechte, Rollen, Kanäle oder Timeouts haben sich geändert.
+    pub fn invalidate_guild(&self, guild_id: i64) {
+        self.perms.invalidate_guild(guild_id);
+        let channels: Vec<i64> = self
+            .channel_guilds
+            .iter()
+            .filter(|entry| *entry.value() == guild_id)
+            .map(|entry| *entry.key())
+            .collect();
+        for channel_id in channels {
+            self.channel_info.remove(&channel_id);
+        }
+    }
+
+    pub fn invalidate_channel(&self, channel_id: i64) {
+        self.channel_info.remove(&channel_id);
+    }
+
+    /// Neues Mitglied: laufende Sessions bekommen ab sofort Guild-Events.
+    pub fn member_added(&self, guild_id: i64, user_id: i64) {
+        let ids: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|entry| entry.user.id == user_id)
+            .map(|entry| entry.id.clone())
+            .collect();
+        let mut set = self.guilds.entry(guild_id).or_default();
+        for id in ids {
+            set.insert(id);
+        }
+    }
+
+    /// Mitglied entfernt (Kick/Ban): Abos der Guild sofort beenden, damit keine
+    /// Nachrichten mehr ankommen. Der Rechte-Cache wird geleert.
+    pub fn member_removed(&self, guild_id: i64, user_id: i64) {
+        self.perms.invalidate_guild(guild_id);
+        let sessions: Vec<Arc<Session>> = self
+            .sessions
+            .iter()
+            .filter(|entry| entry.user.id == user_id)
+            .map(|entry| Arc::clone(entry.value()))
+            .collect();
+        for session in sessions {
+            if let Some(mut set) = self.guilds.get_mut(&guild_id) {
+                set.remove(&session.id);
+            }
+            let mut subscriptions = lock(&session.subscriptions);
+            let in_guild: Vec<i64> = subscriptions
+                .iter()
+                .copied()
+                .filter(|channel| {
+                    self.channel_guilds
+                        .get(channel)
+                        .is_some_and(|guild| *guild == guild_id)
+                })
+                .collect();
+            for channel_id in in_guild {
+                subscriptions.remove(&channel_id);
+                if let Some(mut set) = self.channels.get_mut(&channel_id) {
+                    set.remove(&session.id);
+                }
+            }
+        }
+    }
+
+    /// Kanalregeln beim Senden, gemeinsam für Gateway und REST: archivierte
+    /// Threads sind gesperrt, Slowmode gilt außer für Moderation.
+    pub async fn check_send(
+        &self,
+        channel_id: i64,
+        user_id: i64,
+        perms: Permissions,
+    ) -> Result<(), (&'static str, String)> {
+        let Some(info) = self.channel_info(channel_id).await else {
+            return Ok(());
+        };
+        if info.archived {
+            return Err(("archived", "thread is archived".to_owned()));
+        }
+        if perms.intersects(Permissions::MANAGE_MESSAGES | Permissions::MANAGE_CHANNELS) {
+            return Ok(());
+        }
+        self.slowmode_check(channel_id, user_id, info.slowmode_secs)
+            .map_err(|wait| ("slowmode", format!("slowmode: wait {wait}s")))
+    }
+
+    async fn channel_info(&self, channel_id: i64) -> Option<ChannelInfo> {
+        if let Some(info) = self.channel_info.get(&channel_id)
+            && info.fetched.elapsed() < CHANNEL_INFO_TTL
+        {
+            return Some(*info);
+        }
+        let channel = self.db.channel(channel_id).await.ok().flatten()?;
+        let info = ChannelInfo {
+            slowmode_secs: channel.slowmode_secs,
+            archived: channel.kind == CHANNEL_THREAD && channel.archived,
+            fetched: Instant::now(),
+        };
+        self.channel_info.insert(channel_id, info);
+        Some(info)
+    }
+
+    /// Prüft und vermerkt den Slowmode. `Err(Sekunden)` = noch so lange warten.
+    fn slowmode_check(&self, channel_id: i64, user_id: i64, secs: i32) -> Result<(), u64> {
+        if secs <= 0 {
+            return Ok(());
+        }
+        let window = Duration::from_secs(secs as u64);
+        let key = (channel_id, user_id);
+        if let Some(last) = self.slowmode_last.get(&key) {
+            let elapsed = last.elapsed();
+            if elapsed < window {
+                return Err((window - elapsed).as_secs().max(1));
+            }
+        }
+        self.slowmode_last.insert(key, Instant::now());
+        Ok(())
     }
 
     pub fn router(self: Arc<Self>) -> Router {
@@ -198,6 +350,9 @@ impl Gateway {
                 tick.tick().await;
                 gateway.tokens.sweep();
                 gateway.perms.invalidate_idle(Duration::from_secs(120));
+                gateway
+                    .slowmode_last
+                    .retain(|_, at| at.elapsed() < Duration::from_secs(21_600));
                 let ttl_ms = gateway.cfg.resume_ttl.as_millis() as i64;
                 let now = now_ms();
                 let expired: Vec<String> = gateway
@@ -317,7 +472,18 @@ impl Gateway {
             warn!("gateway hello payload decode failed");
             return;
         };
-        let Some(access) = self.tokens.validate(&token) else {
+        // Nutzer: Access-Token aus dem Speicher. Bots: `nb_…`-Token aus der DB.
+        let access_user = match self.tokens.validate(&token) {
+            Some(access) => Some(access.user_id),
+            None if tokens::is_bot_token(&token) => self
+                .db
+                .bot_by_token(&tokens::hash_bot_token(&token))
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        let Some(access_user_id) = access_user else {
             warn!("gateway hello token rejected");
             self.send_to(
                 &tx,
@@ -330,7 +496,7 @@ impl Gateway {
 
         let session = match resume {
             Some(request) => match self.sessions.get(&request.session_id) {
-                Some(entry) if entry.user.id == access.user_id => {
+                Some(entry) if entry.user.id == access_user_id => {
                     let session = Arc::clone(&entry);
                     drop(entry);
                     *lock(&session.tx) = Some(tx.clone());
@@ -366,7 +532,7 @@ impl Gateway {
                 }
             },
             None => {
-                let Some(user) = self.db.user_by_id(access.user_id).await.ok().flatten() else {
+                let Some(user) = self.db.user_by_id(access_user_id).await.ok().flatten() else {
                     return;
                 };
                 let guilds = self.db.guilds_for_user(user.id).await.unwrap_or_default();
@@ -538,6 +704,10 @@ impl Gateway {
                     self.send_error(session, "bad_request", msg, Some(nonce));
                     return;
                 }
+                if let Err((code, message)) = self.check_send(channel_id, user_id, perms).await {
+                    self.send_error(session, code, &message, Some(nonce));
+                    return;
+                }
                 let id = self.ids.next_id();
                 let created_at = match self
                     .db
@@ -580,6 +750,7 @@ impl Gateway {
                     reply_to,
                     reactions: Vec::new(),
                     attachments: Vec::new(),
+                    pinned: false,
                 };
                 self.dispatch_channel(channel_id, &Event::MessageCreate { message: view });
                 self.metrics
@@ -1018,6 +1189,7 @@ mod tests {
                 display_name: "Load 0000".to_owned(),
                 avatar_url: None,
                 status: 1,
+                bot: false,
             },
             vec![1],
             1.0,

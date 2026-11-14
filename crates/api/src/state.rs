@@ -33,6 +33,38 @@ pub struct AppState {
     pub hash_limit: Arc<Semaphore>,
 }
 
+impl AppState {
+    /// Entfernt jemanden aus allen Sprachkanälen einer Guild (Kick, Bann,
+    /// Timeout) und meldet das den übrigen Mitgliedern.
+    pub async fn sfu_kick(&self, guild_id: i64, user_id: i64) {
+        let Ok(channels) = self.db.channels(guild_id).await else {
+            return;
+        };
+        for channel in channels.iter().filter(|channel| channel.kind == 1) {
+            let present = self
+                .sfu
+                .participants(channel.id)
+                .iter()
+                .any(|participant| participant.user_id == user_id);
+            if present {
+                self.sfu.leave(channel.id, user_id);
+                self.gateway.publish_guild(
+                    guild_id,
+                    &nova_common::protocol::Event::VoiceStateUpdate {
+                        guild_id,
+                        channel_id: channel.id,
+                        user_id,
+                        connected: false,
+                        muted: false,
+                        deafened: false,
+                        screen: false,
+                    },
+                );
+            }
+        }
+    }
+}
+
 pub const REFRESH_COOKIE: &str = "nova_rt";
 pub const ACCESS_COOKIE: &str = "nova_at";
 pub const REFRESH_PATH: &str = "/api/v1/auth";
@@ -41,6 +73,8 @@ pub const ACCESS_PATH: &str = "/api/v1";
 pub struct Auth {
     pub user_id: i64,
     pub session_id: String,
+    /// Anfrage kommt von einem Bot (`Authorization: Bot nb_…`).
+    pub is_bot: bool,
 }
 
 impl FromRequestParts<AppState> for Auth {
@@ -50,10 +84,29 @@ impl FromRequestParts<AppState> for Auth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let bearer = parts
+        let authorization = parts
             .headers
             .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.to_str().ok());
+
+        // Bots: Token-Hash in der Datenbank. Kein Cookie-Fallback.
+        if let Some(token) = authorization.and_then(|value| value.strip_prefix("Bot ")) {
+            let token = token.trim();
+            if !nova_common::tokens::is_bot_token(token) {
+                return Err(ApiError::Unauthorized);
+            }
+            let hash = nova_common::tokens::hash_bot_token(token);
+            let Some(bot_id) = state.db.bot_by_token(&hash).await? else {
+                return Err(ApiError::Unauthorized);
+            };
+            return Ok(Self {
+                user_id: bot_id,
+                session_id: format!("bot:{bot_id}"),
+                is_bot: true,
+            });
+        }
+
+        let bearer = authorization
             .and_then(|value| value.strip_prefix("Bearer "))
             .map(str::trim)
             .filter(|token| !token.is_empty());
@@ -72,6 +125,7 @@ impl FromRequestParts<AppState> for Auth {
         Ok(Self {
             user_id: entry.user_id,
             session_id: entry.session_id,
+            is_bot: false,
         })
     }
 }

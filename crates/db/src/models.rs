@@ -10,6 +10,7 @@ pub struct User {
     pub avatar_id: Option<i64>,
     pub status: i16,
     pub created_at: DateTime<Utc>,
+    pub is_bot: bool,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -32,6 +33,7 @@ pub struct Role {
     pub is_everyone: bool,
 }
 
+/// `kind`: 0 Text, 1 Sprache, 2 Thread (mit `parent_id` und `root_message_id`).
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Channel {
     pub id: i64,
@@ -41,7 +43,15 @@ pub struct Channel {
     pub topic: Option<String>,
     pub parent_id: Option<i64>,
     pub position: i32,
+    pub slowmode_secs: i32,
+    pub root_message_id: Option<i64>,
+    pub owner_id: Option<i64>,
+    pub archived: bool,
 }
+
+pub const CHANNEL_TEXT: i16 = 0;
+pub const CHANNEL_VOICE: i16 = 1;
+pub const CHANNEL_THREAD: i16 = 2;
 
 #[derive(Debug, Clone, FromRow)]
 pub struct MessageRow {
@@ -52,10 +62,12 @@ pub struct MessageRow {
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
     pub reply_to: Option<i64>,
+    pub pinned_at: Option<DateTime<Utc>>,
     pub author_handle: String,
     pub author_display_name: String,
     pub author_avatar_id: Option<i64>,
     pub author_status: i16,
+    pub author_is_bot: bool,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -98,6 +110,9 @@ pub struct MemberRow {
     pub status: i16,
     pub nickname: Option<String>,
     pub joined_at: DateTime<Utc>,
+    pub timeout_until: Option<DateTime<Utc>>,
+    pub is_bot: bool,
+    pub role_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -115,4 +130,42 @@ pub struct OverrideRow {
     pub target_id: i64,
     pub allow: i64,
     pub deny: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct BanRow {
+    pub user_id: i64,
+    pub handle: String,
+    pub display_name: String,
+    pub moderator_id: Option<i64>,
+    pub reason: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct AuditRow {
+    pub id: i64,
+    pub actor_id: Option<i64>,
+    pub actor_name: Option<String>,
+    pub action: String,
+    pub target_id: Option<i64>,
+    pub reason: Option<String>,
+    pub detail: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Ungelesen-Stand eines Kanals für einen Nutzer.
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct UnreadRow {
+    pub channel_id: i64,
+    pub last_message_id: Option<i64>,
+    pub last_read_id: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct BotRow {
+    pub id: i64,
+    pub handle: String,
+    pub display_name: String,
+    pub created_at: DateTime<Utc>,
 }

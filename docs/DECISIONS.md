@@ -4,6 +4,53 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-14 — Timeout als Rechte-Entzug statt eigener Prüfung
+
+**Entscheidung:** Ein laufender Timeout entfernt in `effective_permissions`
+die Bits `TIMEOUT_REVOKED` (Senden, Reagieren, Verbinden, Sprechen, Streamen,
+Threads). Es gibt keine zweite Timeout-Prüfung in Gateway, REST oder Voice.
+
+**Warum:** Eine Stelle statt vier; jeder Pfad, der Rechte prüft, respektiert
+Timeouts automatisch. Der 30-s-Rechte-Cache des Gateways wird bei jeder
+Moderationsaktion geleert.
+
+## 2026-11-14 — Threads sind Kanäle mit `kind = 2`
+
+**Entscheidung:** Ein Thread ist eine Zeile in `channels` mit `parent_id`,
+`root_message_id`, `owner_id` und `archived`. Nachrichten, Lesestand, Pins und
+Gateway-Abos funktionieren ohne neue Tabellen. Rechte erbt der Thread vom
+Elternkanal.
+
+**Warum:** Kein zweites Nachrichtenmodell, keine Migration bestehender Daten;
+ältere Clients zeigen Threads schlicht nicht an.
+
+## 2026-11-14 — Bot-Tokens mit Präfix, nur als Hash gespeichert
+
+**Entscheidung:** Bot-Tokens sind `nb_` + 64 Hex-Zeichen, gespeichert wird nur
+SHA-256, Header `Authorization: Bot …`. Bots sind Nutzerzeilen mit `is_bot`.
+
+**Warum:** Gleiche Rechteprüfung wie für Menschen; das Präfix erlaubt, Tokens in
+Logs und Secret-Scannern zu erkennen; ein Datenbank-Leak verrät kein Token.
+
+## 2026-11-14 — Nativer Client bleibt neben Tauri
+
+**Entscheidung:** Der Master-Prompt schreibt Tauri 2 als Desktop-Hülle fest.
+Tauri bleibt (Release-Workflow, Installer), der native iced-Client
+(`crates/client-native`, seit v0.3.0) läuft daneben weiter.
+
+**Warum:** Tauri nutzt WebView2/Chromium; der native Client ist der Weg zu
+„schneller als Chromium“ (gemessen ~22–30 MB statt 130–250 MB). Beide teilen
+Server und Protokoll, entfernen hätte nur Nachteile.
+
+## 2026-11-14 — Integrationstests ohne `migrate`
+
+**Entscheidung:** `crates/nova/tests` setzt ein migriertes Schema voraus und
+ruft `Db::migrate` nicht auf. Die CI wendet alle Dateien aus
+`crates/db/migrations` per `psql` an.
+
+**Warum:** Die sqlx-Makros brauchen das Schema ohnehin schon beim Kompilieren;
+ein zweites `migrate` würde mit dem per `psql` angelegten Schema kollidieren.
+
 ## 2026-11-13 — UI-Redesign als Token-System
 
 **Entscheidung:** Das komplette Erscheinungsbild liegt in einer

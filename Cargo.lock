@@ -2532,6 +2532,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
+name = "echo-bot"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "nova-common",
+ "reqwest 0.13.5",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+]
+
+[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5156,7 +5169,9 @@ dependencies = [
  "anyhow",
  "argon2",
  "axum",
+ "chrono",
  "clap",
+ "futures-util",
  "hex",
  "mimalloc",
  "nova-api",
@@ -5173,6 +5188,7 @@ dependencies = [
  "socket2 0.5.10",
  "sqlx",
  "tokio",
+ "tokio-tungstenite 0.26.2",
  "tower",
  "tower-http",
  "tracing",
@@ -5217,6 +5233,7 @@ dependencies = [
  "rand 0.8.8",
  "rmp-serde",
  "serde",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
 ]
 
@@ -10572,6 +10589,13 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xtask"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "xxhash-rust"

@@ -48,6 +48,18 @@ impl Permissions {
         .union(Self::CREATE_INVITE)
         .union(Self::CREATE_THREADS);
 
+    /// Was ein Timeout entzieht: Mitglieder dürfen weiter lesen, aber nicht
+    /// schreiben, reagieren, sprechen oder streamen.
+    pub const TIMEOUT_REVOKED: Self = Self::SEND_MESSAGES
+        .union(Self::ADD_REACTIONS)
+        .union(Self::ATTACH_FILES)
+        .union(Self::CONNECT)
+        .union(Self::SPEAK)
+        .union(Self::STREAM)
+        .union(Self::CREATE_THREADS)
+        .union(Self::SEND_VOICE_MESSAGES)
+        .union(Self::USE_SOUNDBOARD);
+
     /// Apply a channel override: deny wins over an existing allow, then allow is added.
     pub fn apply_override(&mut self, allow: Self, deny: Self) {
         *self = (*self & !deny) | allow;

@@ -52,6 +52,10 @@ impl fmt::Display for VoiceError {
 
 impl std::error::Error for VoiceError {}
 
+/// Höchstens so viele gleichzeitige Videospuren (Screenshares) pro Raum. Mehr
+/// würde auf dem 2-vCore-VPS die Upload-Bandbreite sprengen.
+pub const MAX_VIDEO_TRACKS: usize = 8;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Participant {
     pub user_id: i64,
@@ -59,6 +63,7 @@ pub struct Participant {
     pub display_name: String,
     pub muted: bool,
     pub screen: bool,
+    pub deafened: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -159,8 +164,36 @@ impl Sfu {
             display_name: user.display_name.clone(),
             muted: false,
             screen: false,
+            deafened: false,
         };
         room.join(participant, offer, self.inner.cfg.public_ip)
+    }
+
+    /// Vom Client gemeldeter Zustand. `None`, wenn die Person nicht im Raum ist.
+    pub fn set_state(
+        &self,
+        channel_id: i64,
+        user_id: i64,
+        muted: bool,
+        deafened: bool,
+        screen: bool,
+    ) -> Option<Participant> {
+        let room = self
+            .inner
+            .rooms
+            .lock()
+            .ok()
+            .and_then(|rooms| rooms.get(&channel_id).cloned())?;
+        let mut participants = room.participants.lock().ok()?;
+        let state = participants.get_mut(&user_id)?;
+        state.public.muted = muted;
+        state.public.deafened = deafened;
+        // `screen = true` setzt erst der SFU, wenn wirklich eine Videospur
+        // ankommt; der Client darf es nur zurücknehmen.
+        if !screen {
+            state.public.screen = false;
+        }
+        Some(state.public.clone())
     }
 
     pub fn leave(&self, channel_id: i64, user_id: i64) {
@@ -536,8 +569,16 @@ impl Deref for ClientId {
 #[derive(Debug)]
 struct TrackIn {
     origin: ClientId,
+    /// Nutzer hinter der Spur; wird als Stream-ID `u{user_id}` weitergegeben.
+    user_id: i64,
     mid: Mid,
     kind: MediaKind,
+}
+
+/// Stream-ID ausgehender Spuren. Der Web-Client ordnet darüber Audio-/Video-
+/// Elemente Personen zu (Lautstärke, Sprecher-Ring, Kacheln).
+fn stream_id(user_id: i64) -> String {
+    format!("u{user_id}")
 }
 
 #[derive(Debug)]
@@ -661,15 +702,29 @@ impl Client {
     }
 
     fn handle_media_added(&mut self, mid: Mid, kind: MediaKind) -> Propagated {
-        if kind == MediaKind::Video
-            && let Ok(mut participants) = self.participants.lock()
-            && let Some(participant) = participants.get_mut(&self.user_id)
-        {
-            participant.public.screen = true;
+        if kind == MediaKind::Video {
+            let Ok(mut participants) = self.participants.lock() else {
+                return Propagated::Noop;
+            };
+            let streaming = participants
+                .iter()
+                .filter(|(user_id, state)| **user_id != self.user_id && state.public.screen)
+                .count();
+            if streaming >= MAX_VIDEO_TRACKS {
+                warn!(
+                    user_id = self.user_id,
+                    "SFU: Video-Limit erreicht, Spur wird nicht weitergeleitet"
+                );
+                return Propagated::Noop;
+            }
+            if let Some(participant) = participants.get_mut(&self.user_id) {
+                participant.public.screen = true;
+            }
         }
         let entry = TrackInEntry {
             id: Arc::new(TrackIn {
                 origin: self.id,
+                user_id: self.user_id,
                 mid,
                 kind,
             }),
@@ -742,11 +797,10 @@ impl Client {
             match track.state {
                 TrackOutState::ToOpen => {
                     if let Some(track_in) = track.track_in.upgrade() {
-                        let stream_id = track_in.origin.to_string();
                         let mid = change.add_media(
                             track_in.kind,
                             Direction::SendOnly,
-                            Some(stream_id),
+                            Some(stream_id(track_in.user_id)),
                             None,
                             None,
                         );
@@ -910,7 +964,18 @@ mod tests {
             display_name: "Tester".into(),
             avatar_url: None,
             status: 0,
+            bot: false,
         }
+    }
+
+    #[test]
+    fn stream_ids_name_the_user() {
+        assert_eq!(stream_id(247126938131369984), "u247126938131369984");
+    }
+
+    #[test]
+    fn set_state_needs_a_participant() {
+        assert!(sfu().set_state(42, 1, true, false, false).is_none());
     }
 
     fn sfu() -> Sfu {

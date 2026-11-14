@@ -113,6 +113,9 @@ pub struct UserPublic {
     pub display_name: String,
     pub avatar_url: Option<String>,
     pub status: i16,
+    /// Bot-Konto. Neu in v0.4; ältere Server senden es nicht.
+    #[serde(default)]
+    pub bot: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -150,6 +153,9 @@ pub struct MessageView {
     pub reply_to: Option<i64>,
     pub reactions: Vec<ReactionSummary>,
     pub attachments: Vec<AttachmentView>,
+    /// Angepinnt. Neu in v0.4.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +326,39 @@ pub enum Event {
         user_id: i64,
         status: i16,
     },
+    // --- ab v0.4: alle neuen Events sind für ältere Clients ignorierbar ---
+    /// Kanäle, Threads, Rollen oder Rechte der Guild haben sich geändert;
+    /// Clients laden `GET /guilds/{id}` neu.
+    GuildUpdate {
+        guild_id: i64,
+    },
+    /// Mitglied wurde entfernt (Kick, Ban, Austritt).
+    GuildMemberRemove {
+        guild_id: i64,
+        user_id: i64,
+    },
+    /// Rollen oder Timeout eines Mitglieds haben sich geändert.
+    GuildMemberUpdate {
+        guild_id: i64,
+        user_id: i64,
+        timeout_until: Option<DateTime<Utc>>,
+    },
+    MessagePin {
+        channel_id: i64,
+        message_id: i64,
+        pinned: bool,
+    },
+    /// Jemand ist einem Sprachkanal beigetreten, hat ihn verlassen oder den
+    /// Zustand (stumm, taub, Bildschirm) geändert.
+    VoiceStateUpdate {
+        guild_id: i64,
+        channel_id: i64,
+        user_id: i64,
+        connected: bool,
+        muted: bool,
+        deafened: bool,
+        screen: bool,
+    },
 }
 
 impl Event {
@@ -332,6 +371,11 @@ impl Event {
             Event::ReactionAdd { .. } => "reaction_add",
             Event::ReactionRemove { .. } => "reaction_remove",
             Event::PresenceUpdate { .. } => "presence_update",
+            Event::GuildUpdate { .. } => "guild_update",
+            Event::GuildMemberRemove { .. } => "guild_member_remove",
+            Event::GuildMemberUpdate { .. } => "guild_member_update",
+            Event::MessagePin { .. } => "message_pin",
+            Event::VoiceStateUpdate { .. } => "voice_state_update",
         }
     }
 }
@@ -390,6 +434,94 @@ mod tests {
     }
 
     const OP_PING_PLACEHOLDER: u8 = 99;
+
+    #[test]
+    fn new_events_roundtrip_and_keep_their_tag() {
+        let events = [
+            Event::GuildUpdate { guild_id: 1 },
+            Event::GuildMemberRemove {
+                guild_id: 1,
+                user_id: 2,
+            },
+            Event::GuildMemberUpdate {
+                guild_id: 1,
+                user_id: 2,
+                timeout_until: None,
+            },
+            Event::MessagePin {
+                channel_id: 3,
+                message_id: 4,
+                pinned: true,
+            },
+            Event::VoiceStateUpdate {
+                guild_id: 1,
+                channel_id: 5,
+                user_id: 2,
+                connected: true,
+                muted: false,
+                deafened: false,
+                screen: true,
+            },
+        ];
+        for event in events {
+            let bytes = encode_body(OP_DISPATCH, 1, &rmp_serde::to_vec_named(&event).unwrap());
+            let frame = decode(&bytes).expect("frame");
+            let back: Event = decode_body(frame.body).expect("event");
+            assert_eq!(back.kind(), event.kind());
+            // Ältere Web-Clients lesen nur `t` und ignorieren Unbekanntes.
+            #[derive(Deserialize)]
+            struct Envelope {
+                t: String,
+            }
+            let envelope: Envelope = rmp_serde::from_slice(frame.body).expect("envelope");
+            assert_eq!(envelope.t, event.kind());
+        }
+    }
+
+    #[test]
+    fn old_message_views_without_pinned_still_decode() {
+        #[derive(Serialize)]
+        struct OldUser<'a> {
+            id: i64,
+            handle: &'a str,
+            display_name: &'a str,
+            avatar_url: Option<&'a str>,
+            status: i16,
+        }
+        #[derive(Serialize)]
+        struct OldMessage<'a> {
+            id: i64,
+            channel_id: i64,
+            author: OldUser<'a>,
+            content: &'a str,
+            created_at: DateTime<Utc>,
+            edited_at: Option<DateTime<Utc>>,
+            reply_to: Option<i64>,
+            reactions: Vec<ReactionSummary>,
+            attachments: Vec<AttachmentView>,
+        }
+        let old = OldMessage {
+            id: 1,
+            channel_id: 2,
+            author: OldUser {
+                id: 3,
+                handle: "nova",
+                display_name: "Nova",
+                avatar_url: None,
+                status: 0,
+            },
+            content: "hallo",
+            created_at: Utc::now(),
+            edited_at: None,
+            reply_to: None,
+            reactions: vec![],
+            attachments: vec![],
+        };
+        let bytes = rmp_serde::to_vec_named(&old).unwrap();
+        let view: MessageView = rmp_serde::from_slice(&bytes).expect("decode");
+        assert!(!view.pinned);
+        assert!(!view.author.bot);
+    }
 
     #[test]
     fn oversized_frames_are_rejected() {

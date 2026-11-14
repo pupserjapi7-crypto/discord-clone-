@@ -1,6 +1,10 @@
 //! HTTP API: auth, users, guilds, channels, message history, health.
 
+mod bots;
+mod channels;
 pub mod error;
+mod guard;
+mod moderation;
 pub mod state;
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
@@ -13,7 +17,7 @@ use axum::{
     Json, Router,
     extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
-    routing::{get, post},
+    routing::{delete, get, post, put},
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use nova_common::{
@@ -46,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         .allow_methods([
             Method::GET,
             Method::POST,
+            Method::PUT,
             Method::PATCH,
             Method::DELETE,
             Method::OPTIONS,
@@ -63,8 +68,79 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/guilds/{guild_id}/channels", post(create_channel))
         .route("/api/v1/guilds/{guild_id}/invites", post(create_invite))
         .route("/api/v1/invites/{code}", post(join_invite))
-        .route("/api/v1/channels/{channel_id}/messages", get(list_messages))
+        // Moderation, Rollen, Audit-Log
+        .route(
+            "/api/v1/guilds/{guild_id}/members/{user_id}/kick",
+            post(moderation::kick),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/members/{user_id}/timeout",
+            put(moderation::timeout),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/members/{user_id}/roles/{role_id}",
+            put(moderation::add_member_role).delete(moderation::remove_member_role),
+        )
+        .route("/api/v1/guilds/{guild_id}/bans", get(moderation::list_bans))
+        .route(
+            "/api/v1/guilds/{guild_id}/bans/{user_id}",
+            put(moderation::ban).delete(moderation::unban),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/audit-log",
+            get(moderation::audit_log),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/roles",
+            post(moderation::create_role),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/roles/{role_id}",
+            axum::routing::patch(moderation::update_role).delete(moderation::delete_role),
+        )
+        .route(
+            "/api/v1/guilds/{guild_id}/bots/{bot_id}",
+            put(bots::add_to_guild),
+        )
+        // Kanäle, Nachrichten, Pins, Threads
+        .route(
+            "/api/v1/channels/{channel_id}",
+            axum::routing::patch(channels::update_channel).delete(channels::delete_channel),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/overrides/{kind}/{target_id}",
+            put(moderation::set_override).delete(moderation::delete_override),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages",
+            get(list_messages).post(channels::create_message),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}",
+            delete(channels::delete_message),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/messages/{message_id}/threads",
+            post(channels::create_thread),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/pins",
+            get(channels::list_pins),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/pins/{message_id}",
+            put(channels::pin).delete(channels::unpin),
+        )
+        .route("/api/v1/channels/{channel_id}/ack", post(channels::ack))
+        // Bots
+        .route("/api/v1/bots", get(bots::list_bots).post(bots::create_bot))
+        .route("/api/v1/bots/{bot_id}/token", post(bots::reset_token))
+        // Voice
         .route("/api/v1/channels/{channel_id}/voice/join", post(voice_join))
+        .route(
+            "/api/v1/channels/{channel_id}/voice/state",
+            post(voice_state),
+        )
         .route(
             "/api/v1/channels/{channel_id}/voice/leave",
             post(voice_leave),
@@ -106,7 +182,7 @@ fn stringify_ids(value: Value) -> Value {
     }
 }
 
-fn json_ids<T: Serialize>(value: &T) -> Json<Value> {
+pub(crate) fn json_ids<T: Serialize>(value: &T) -> Json<Value> {
     Json(stringify_ids(
         serde_json::to_value(value).unwrap_or(Value::Null),
     ))
@@ -522,10 +598,15 @@ struct MemberView {
     status: i16,
     avatar_url: Option<String>,
     nickname: Option<String>,
+    /// Ab v0.4: Rollen-IDs (ohne @everyone), Timeout, Bot-Kennzeichen.
+    role_ids: Vec<i64>,
+    timeout_until: Option<DateTime<Utc>>,
+    bot: bool,
 }
 
 impl MemberView {
     fn from_row(base_url: &str, row: MemberRow) -> Self {
+        let timeout_until = row.timeout_until.filter(|until| *until > Utc::now());
         Self {
             user_id: row.user_id,
             handle: row.handle,
@@ -533,6 +614,9 @@ impl MemberView {
             status: row.status,
             avatar_url: row.avatar_id.map(|id| views::attachment_url(base_url, id)),
             nickname: None,
+            role_ids: row.role_ids,
+            timeout_until,
+            bot: row.is_bot,
         }
     }
 }
@@ -544,6 +628,8 @@ struct GuildDetail {
     roles: Vec<Role>,
     members: Vec<MemberView>,
     permissions: u64,
+    /// Ab v0.4: letzte Nachricht und Lesestand je sichtbarem Kanal.
+    unread: Vec<nova_db::models::UnreadRow>,
 }
 
 async fn get_guild(
@@ -585,6 +671,12 @@ async fn get_guild(
         .into_iter()
         .map(|row| MemberView::from_row(&state.cfg.public_origin, row))
         .collect();
+    let text_ids: Vec<i64> = visible
+        .iter()
+        .filter(|channel| channel.kind != 1)
+        .map(|channel| channel.id)
+        .collect();
+    let unread = state.db.unread_state(auth.user_id, &text_ids).await?;
 
     let detail = GuildDetail {
         guild,
@@ -592,6 +684,7 @@ async fn get_guild(
         roles,
         members,
         permissions: base_perms.bits(),
+        unread,
     };
     Ok(json_ids(&detail))
 }
@@ -637,6 +730,20 @@ async fn create_channel(
             None,
         )
         .await?;
+    state.gateway.publish_guild(
+        guild_id,
+        &nova_common::protocol::Event::GuildUpdate { guild_id },
+    );
+    guard::audit(
+        &state,
+        guild_id,
+        auth.user_id,
+        "channel_create",
+        Some(channel.id),
+        None,
+        Some(&channel.name),
+    )
+    .await;
     Ok((StatusCode::CREATED, json_ids(&channel)))
 }
 
@@ -679,7 +786,14 @@ async fn join_invite(
     Path(code): Path<String>,
 ) -> ApiResult<Json<Value>> {
     match state.db.accept_invite(&code, auth.user_id).await? {
-        Some(guild_id) => Ok(json_ids(&JoinResponse { guild_id })),
+        Some(guild_id) => {
+            state.gateway.member_added(guild_id, auth.user_id);
+            state.gateway.publish_guild(
+                guild_id,
+                &nova_common::protocol::Event::GuildUpdate { guild_id },
+            );
+            Ok(json_ids(&JoinResponse { guild_id }))
+        }
         None => Err(ApiError::NotFound),
     }
 }
@@ -769,27 +883,31 @@ struct VoiceParticipantView {
     display_name: String,
     muted: bool,
     screen: bool,
+    deafened: bool,
 }
 
 async fn voice_channel(
     state: &AppState,
     user_id: i64,
     channel_id: i64,
-) -> ApiResult<nova_db::models::Channel> {
-    let Some(channel) = state.db.channel(channel_id).await? else {
-        return Err(ApiError::NotFound);
-    };
-    if !state.db.is_member(channel.guild_id, user_id).await? {
-        return Err(ApiError::NotFound);
+) -> ApiResult<(nova_db::models::Channel, Permissions)> {
+    guard::visible_channel(state, channel_id, user_id).await
+}
+
+fn voice_event(
+    channel: &nova_db::models::Channel,
+    user_id: i64,
+    participant: Option<&nova_sfu::Participant>,
+) -> nova_common::protocol::Event {
+    nova_common::protocol::Event::VoiceStateUpdate {
+        guild_id: channel.guild_id,
+        channel_id: channel.id,
+        user_id,
+        connected: participant.is_some(),
+        muted: participant.is_some_and(|p| p.muted),
+        deafened: participant.is_some_and(|p| p.deafened),
+        screen: participant.is_some_and(|p| p.screen),
     }
-    let perms = state
-        .db
-        .effective_permissions(channel.guild_id, user_id, Some(channel_id))
-        .await?;
-    if !perms.contains(Permissions::VIEW_CHANNEL) {
-        return Err(ApiError::NotFound);
-    }
-    Ok(channel)
 }
 
 async fn voice_join(
@@ -798,11 +916,15 @@ async fn voice_join(
     Path(channel_id): Path<i64>,
     Json(req): Json<VoiceJoinRequest>,
 ) -> ApiResult<Json<Value>> {
-    let channel = voice_channel(&state, auth.user_id, channel_id).await?;
+    let (channel, perms) = voice_channel(&state, auth.user_id, channel_id).await?;
     if channel.kind != 1 {
         return Err(ApiError::BadRequest(
             "channel is not a voice channel".into(),
         ));
+    }
+    // CONNECT fehlt auch während eines Timeouts.
+    if !perms.contains(Permissions::CONNECT) {
+        return Err(ApiError::Forbidden);
     }
     if req.sdp.len() > 64 * 1024 {
         return Err(ApiError::TooLarge);
@@ -828,6 +950,15 @@ async fn voice_join(
                 ApiError::Internal(anyhow::anyhow!("SFU unavailable"))
             }
         })?;
+    let participant = state
+        .sfu
+        .participants(channel_id)
+        .into_iter()
+        .find(|p| p.user_id == auth.user_id);
+    state.gateway.publish_guild(
+        channel.guild_id,
+        &voice_event(&channel, auth.user_id, participant.as_ref()),
+    );
     Ok(Json(json!({ "sdp": answer })))
 }
 
@@ -836,8 +967,44 @@ async fn voice_leave(
     auth: Auth,
     Path(channel_id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-    voice_channel(&state, auth.user_id, channel_id).await?;
+    let (channel, _) = voice_channel(&state, auth.user_id, channel_id).await?;
     state.sfu.leave(channel_id, auth.user_id);
+    state
+        .gateway
+        .publish_guild(channel.guild_id, &voice_event(&channel, auth.user_id, None));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct VoiceStateRequest {
+    muted: bool,
+    #[serde(default)]
+    deafened: bool,
+    #[serde(default)]
+    screen: bool,
+}
+
+/// Der Client meldet Stumm/Taub/Bildschirm; alle Mitglieder sehen es sofort.
+async fn voice_state(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(channel_id): Path<i64>,
+    Json(req): Json<VoiceStateRequest>,
+) -> ApiResult<StatusCode> {
+    let (channel, _) = voice_channel(&state, auth.user_id, channel_id).await?;
+    let Some(participant) = state.sfu.set_state(
+        channel_id,
+        auth.user_id,
+        req.muted,
+        req.deafened,
+        req.screen,
+    ) else {
+        return Err(ApiError::NotFound);
+    };
+    state.gateway.publish_guild(
+        channel.guild_id,
+        &voice_event(&channel, auth.user_id, Some(&participant)),
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -857,6 +1024,7 @@ async fn voice_participants(
             display_name: participant.display_name,
             muted: participant.muted,
             screen: participant.screen,
+            deafened: participant.deafened,
         })
         .collect();
     Ok(json_ids(&participants))

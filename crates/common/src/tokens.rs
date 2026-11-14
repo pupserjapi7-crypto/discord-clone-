@@ -76,9 +76,41 @@ impl TokenStore {
     }
 }
 
+/// Präfix aller Bot-Tokens. Erlaubt, sie in Logs und Headern zu erkennen.
+pub const BOT_TOKEN_PREFIX: &str = "nb_";
+
+/// Erzeugt ein neues Bot-Token (`nb_` + 64 Hex-Zeichen). Gespeichert wird nur
+/// der SHA-256-Hash, siehe [`hash_bot_token`].
+pub fn new_bot_token() -> String {
+    let mut raw = [0u8; 32];
+    OsRng.fill_bytes(&mut raw);
+    format!("{BOT_TOKEN_PREFIX}{}", hex::encode(raw))
+}
+
+pub fn is_bot_token(token: &str) -> bool {
+    token.len() == BOT_TOKEN_PREFIX.len() + 64 && token.starts_with(BOT_TOKEN_PREFIX)
+}
+
+pub fn hash_bot_token(token: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(token.as_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bot_tokens_are_recognisable_and_hash_stably() {
+        let token = new_bot_token();
+        assert!(is_bot_token(&token));
+        assert!(!is_bot_token("abc"));
+        assert_eq!(hash_bot_token(&token), hash_bot_token(&token));
+        assert_ne!(hash_bot_token(&token), hash_bot_token(&new_bot_token()));
+    }
 
     #[test]
     fn issue_and_validate() {

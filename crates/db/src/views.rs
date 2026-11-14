@@ -25,6 +25,7 @@ pub fn user_public(base_url: &str, user: &User) -> UserPublic {
         display_name: user.display_name.clone(),
         avatar_url: user.avatar_id.map(|id| attachment_url(base_url, id)),
         status: user.status,
+        bot: user.is_bot,
     }
 }
 
@@ -43,7 +44,9 @@ pub fn message_view(
             display_name: row.author_display_name,
             avatar_url: row.author_avatar_id.map(|id| attachment_url(base_url, id)),
             status: row.author_status,
+            bot: row.author_is_bot,
         },
+        pinned: row.pinned_at.is_some(),
         content: row.content,
         created_at: row.created_at,
         edited_at: row.edited_at,

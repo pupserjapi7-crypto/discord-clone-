@@ -1,105 +1,106 @@
 # Nova — Status
 
-**Stand:** 13.11.2026 · **Version:** 0.2.2 · **Live:** <https://85-215-175-202.sslip.io>
+**Stand:** 14.11.2026 · **Version:** 0.4.0 (in Arbeit, Master-Prompt v0.2.2 → v1.0)
+**Live:** <https://85-215-175-202.sslip.io> (läuft noch mit v0.2.2)
 
-Kurzfassung: Der Rust-Stack läuft live. Text-Chat, Auth, Gateway, Voice-SFU
-und HTTPS sind verifiziert. Das UI-Redesign ist umgesetzt und lokal geprüft;
-Screenshare-Code ist vorhanden, echte Display-Aufnahme konnte in der
-Automatisierung nicht getestet werden.
-
----
-
-## Fertig und verifiziert
-
-### M0 — Rust-only-Frontend
-- Dioxus 0.7 für Web (WASM) und Tauri 2 als Desktop-Hülle; eine UI-Codebasis.
-- `web/` (SvelteKit) entfernt; kein Node/npm/TypeScript im Build.
-- CSS als eine handgeschriebene Datei mit Tokens; Inline-SVG-Icons; keine
-  externen Fonts.
-- CI baut Rust-Workspace, WASM-Clippy und Tests (Run `43515447012` grün).
-
-### M1 — Gateway, Auth, Text
-- Axum-API, binäres WebSocket-Gateway (MessagePack), Sessions/Presence/Limits
-  im Prozess, PostgreSQL 17 mit `tsvector`-Suche.
-- Argon2id, sichere Cookies, Rate-Limits, Validierung, Prepared Statements.
-- 1.000 WebSocket-Verbindungen getestet, Dispatch-p99 3,3 ms.
-- HTTPS live über `https://85-215-175-202.sslip.io` (Let's Encrypt bis
-  11.02.2027), WSS `/gateway` liefert 101.
-
-### M2 — Voice
-- Eigener str0m-SFU, ICE-lite, UDP 40000–40100, Opus 48 kHz/20 ms ohne
-  Mixing/Transcoding.
-- **UDP-Probe erfolgreich:** Antwort von `93.225.205.80:59448` auf
-  VPS-Port 40000.
-- **Zwei-Client-Test über HTTPS erfolgreich:** beide Teilnehmer im Kanal
-  „Stream“ (Guild `247126938131369984`, Voice `247126938424971264`),
-  `SFU ICE connected ... state=Completed`, `clients=2`.
-- Ursache eines früheren Fehlschlags war die fehlende öffentliche IP im
-  SFU-Advertisement; `NOVA_SFU_PUBLIC_IP=85.215.175.202` ist jetzt in
-  `/etc/nova/nova.env` gesetzt und wird beim Start geloggt.
-
-### M3 — UI / Design
-- Neues Token-System, Dark first plus Light über `prefers-color-scheme`.
-- Server-Rail, Kanalgruppen (einklappbar), gruppierte Nachrichten,
-  Mitgliederpanel (ab 1024 px, umschaltbar), Voice-Bereich mit
-  Mikro/Deafen/Screenshare/Auflegen, Command Palette mit `Strg/Cmd+K`,
-  Modals, Toasts, leere Zustände.
-- Responsive: Rail 64 px unter 900 px, Drawer unter 700 px.
-- Tastaturfokus sichtbar, Klickflächen ≥ 32 px, `aria-label`/`aria-pressed`,
-  `prefers-reduced-motion`.
-- Lokal bei 1280×800, 600×800 sowie im Light Mode geprüft; `Strg+K` und
-  `Esc` funktionieren im Browser, Palette-Suche filtert Kanäle/Aktionen.
-- WASM ca. 763 KB unkomprimiert.
-
-### M4 — Teilweise
-- Screenshare-UI, ein 1080p60-Layer, Bitraten-Deckel und sauberes Beenden
-  sind implementiert.
-- Synthetischer 1920×1080@60-Videopfad mit zwei Teilnehmern wurde verifiziert.
-- **Echte Bildschirmaufnahme** (`getDisplayMedia`) ist im automatisierten
-  Chromium nicht verfügbar (`Not supported`); ein echter Chrome/Edge mit
-  Display-Capture muss das abschließend prüfen.
-
-### Release / Betrieb
-- Server 0.2.2 auf dem VPS (`/opt/nova/releases/v0.2.2`), systemd-Dienst,
-  Apache-Reverse-Proxy, IONOS-UDP-Regel 40000–40100 gespeichert.
-- Desktop-Artefakte 0.2.1: Linux-Binary, AppImage, deb, NSIS-EXE, MSI.
-- Installer sind nicht signiert; SmartScreen kann warnen. Ein echter
-  Installationslauf wurde nicht getestet.
+Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Nächste Schritte*
+ist die Arbeitsliste.
 
 ---
 
-## Bekannte Lücken
+## Bestandsaufnahme (Abschnitt 0 des Master-Prompts)
 
-| Lücke | Wirkung | Nächster Schritt |
-|---|---|---|
-| Screenshare nicht mit realem Display-Capture getestet | keine Aussage über echtes 1080p60 | manueller Test in Chrome/Edge, Werte aus `getStats()` |
-| Kein TURN | Voice scheitert in Netzen mit UDP-Blockade | dokumentierte Grenze; TURN nur bei Bedarf |
-| Keine Latenz-/Bitratenmessung End-to-End | Mouth-to-Ear unbekannt | Click-Track-Harness, Werte in Roadmap |
-| Ungelesen-Badges, Ping, Sprecher-Ring | Design-/Feature-Lücke | M4-Ausbau |
-| Threads, Moderation, Bot-API | nicht implementiert | M4 |
-| Kein manueller Theme-Schalter | Light folgt nur dem System | bewusst, siehe `docs/DECISIONS.md` |
-| Installer unsigniert | SmartScreen-Warnung möglich | Codesigning-Zertifikat |
+Lauf am 14.11.2026 auf Windows: `dx build`, fmt, clippy (Workspace + WASM),
+Tests und `cargo build --release -p nova` waren **alle grün**. WASM 839 KB
+unkomprimiert.
+
+### Wirklich geprüft
+
+- Text-Chat, Auth (Argon2id, Refresh-Rotation mit Reuse-Erkennung), Gateway mit
+  Resume – jetzt durch Integrationstests gegen einen echten Server abgedeckt
+  (`crates/nova/tests/api.rs`).
+- Nativer Desktop-Client 0.3.0: Login, Kanäle, Nachrichten, Update-Prüfung gegen
+  GitHub; lokal gemessen ~22–30 MB RAM, erste Ansicht ~10 ms.
+- Release-Workflow v0.3.0: alle 6 Jobs grün, Assets für Server, Tauri und
+  nativen Client inkl. `.sha256`.
+
+### Nur behauptet (nicht nachgewiesen)
+
+| Behauptung | Wirklichkeit |
+|---|---|
+| Voice funktioniert | Nur ICE/DTLS im Zwei-Client-Test verbunden. Dass **Audio beim Gegenüber ankommt**, ist nicht gemessen; Mouth-to-Ear unbekannt. |
+| Screenshare 1080p60 | Nur synthetischer Video-Track; echte Display-Aufnahme nie getestet. |
+| „Uploads hinter `BlobStore`“ (README) | **Nicht implementiert.** Es gibt Tabelle und URL-Schema, aber keinen Upload-Endpunkt, keinen `BlobStore`, kein Ausliefern. |
+| Installer funktionieren | Gebaut, aber nie installiert; unsigniert. |
+
+### Gefundene Bugs
+
+| Bug | Status |
+|---|---|
+| **Sicherheit:** `effective_permissions` prüfte keine Mitgliedschaft. Über das Gateway konnte jeder angemeldete Nutzer mit bekannter Kanal-ID fremde Kanäle abonnieren und hineinschreiben. | **behoben** (v0.4), Regressionstest `gateway_rejects_non_members` |
+| CI wandte nur `0001_init.sql` an | behoben: alle Migrationen |
+| `crates/ui/dist` sammelte alte WASM-Dateien an (dx räumt nicht auf) | behoben in `cargo xtask ui` |
+| Web-UI prüft Passwort ≥ 8, Server verlangt ≥ 10 | offen → P5 |
+| Web-UI klont den ganzen State bei jedem Render, scrollt bei jedem Render nach unten, ordnet eigene Nachrichten über den Text statt die Nonce zu | offen → P4 |
+| Web-UI fragt Voice-Teilnehmer alle 4 s per HTTP ab | Server sendet jetzt `voice_state_update`; Client-Umbau offen → P2 |
+| Screenshare-Stopp nimmt die Spur nicht aus der PeerConnection, fremde Video-Elemente bleiben nach Verlassen stehen | offen → P2 |
+| Tauri-Hülle: `csp: null`, lädt die Live-URL fest verdrahtet | offen → P5 |
+
+---
+
+## Erledigt in diesem Durchlauf
+
+### P1 – Stabilisieren
+- Rechte-Lücke geschlossen (s. o.); Nicht-Mitglieder und Gebannte bekommen
+  keine Rechte.
+- `cargo xtask ui|gallery|build|check|all` ersetzt die Shell-Kette
+  (`xtask/`, Alias in `.cargo/config.toml`).
+- 7 Integrationstests: Auth inkl. Refresh-Rotation, Rechte, Nachrichten-CRUD,
+  Pins, Threads, Moderation, Bots, Gateway-Roundtrip, Gateway-Abweisung von
+  Nicht-Mitgliedern. Dazu Protokoll-Tests für alle neuen Events und für
+  Abwärtskompatibilität alter `MessageView`s.
+- `CLAUDE.md` und 7 Projekt-Skills unter `.claude/skills/`.
+
+### P3 – Server-Seite
+- Migration `0002`: Timeouts, Banns, Audit-Log, Slowmode, Threads
+  (`kind = 2`), Pins, Bot-Konten und Bot-Tokens. Nur additiv.
+- Moderation: Kick, Bann/Entbannen, Timeout (entzieht Schreiben/Sprechen),
+  Rollen anlegen/ändern/löschen/zuweisen, Kanal-Overrides, Slowmode,
+  Nachrichten löschen und anpinnen, Audit-Log – alles mit Hierarchie-Prüfung
+  und Audit-Eintrag.
+- Threads aus Nachrichten, Archivieren, Ungelesen-Stand pro Kanal in
+  `GET /guilds/{id}`.
+- Bot-API mit `nb_`-Tokens für REST und Gateway, Doku `docs/04-bot-api.md`,
+  Beispiel `examples/echo-bot`.
+- Neue Gateway-Events (`guild_update`, `guild_member_remove`,
+  `guild_member_update`, `message_pin`, `voice_state_update`) – ältere Clients
+  ignorieren sie.
+
+### P2 – Server-Seite
+- SFU vergibt Stream-IDs `u{user_id}` (Zuordnung von Ton/Bild zu Personen).
+- Höchstens 8 gleichzeitige Videospuren pro Raum.
+- `POST /channels/{id}/voice/state` (stumm/taub/Bildschirm) und
+  `voice_state_update`-Events statt Polling; Beitritt verlangt `CONNECT`.
 
 ---
 
 ## Nächste Schritte
 
-1. Dieses Redesign als v0.2.2 deployen und die Live-UI damit prüfen.
-2. Screenshare in einem echten Browser mit Display-Capture testen und
-   `getStats()` (Framerate, Bitrate, Loss) dokumentieren.
-3. Latenz-Harness für Mouth-to-Ear aufsetzen.
-4. Danach M4: Threads, Moderation, Bot-API — jeweils mit Gate und Doku.
+1. **Web-UI (P4 + P2-Client + P3-UI + P5):** Token-Migration auf `--nv-*`,
+   Komponenten aufteilen, Galerie `/dev/gallery`, Moderations-UI,
+   Thread-Seitenleiste, Ungelesen-Badges, Voice-Grid mit Sprecher-Ring,
+   Lautstärke pro Person, Push-to-Talk, Ping, Einstellungen, Onboarding.
+2. Screenshots nach `docs/screenshots/` (Dark/Light).
+3. Uploads mit `BlobStore` nachrüsten (README-Versprechen).
+4. Tauri: CSP, Tray, Benachrichtigungen.
+5. Messwerte erheben und in `docs/03-roadmap.md` eintragen; Version, Commit.
 
 ---
 
 ## Starten
 
-Siehe [`README.md`](README.md). Lokal:
-
 ```bash
 cargo run -p nova -- migrate
 cargo run -p nova -- serve
+cargo xtask check
 ```
-
-Die UI wird separat mit `dx build --web --release --features web` gebaut und
-nach `crates/ui/dist` kopiert; der Server bettet dieses Verzeichnis ein.
