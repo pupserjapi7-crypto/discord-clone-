@@ -19,6 +19,9 @@ futures-util = { workspace = true, features = ["sink"] }
 # schaltet wgpu wieder zu (sinnvoll erst für Video/Screenshare).
 iced = { version = "0.14", default-features = false, features = [
   "tiny-skia",
+  # Nur Vektorpfade für die Icons (src/icon.rs); nutzt das ohnehin
+  # vorhandene kurbo, kein resvg/usvg wie beim `svg`-Feature.
+  "canvas",
   "tokio",
   "crisp",
   "web-colors",

@@ -1,7 +1,13 @@
 //! Farben und Stile — dieselben Tokens wie `crates/ui/assets/app.css`.
 
 use iced::widget::{button, container, text_input};
-use iced::{Background, Border, Color, Shadow, Theme, color};
+use iced::{Background, Border, Color, Font, Shadow, Theme, color, font};
+
+/// Für Namen und Überschriften: trägt Hierarchie ohne größere Schrift.
+pub const SEMIBOLD: Font = Font {
+    weight: font::Weight::Semibold,
+    ..Font::DEFAULT
+};
 
 pub const RAIL: Color = color!(0x0f1115);
 pub const SIDEBAR: Color = color!(0x13161c);
@@ -78,28 +84,6 @@ pub fn sidebar(_: &Theme) -> container::Style {
     fill(SIDEBAR)
 }
 
-pub fn me_bar(_: &Theme) -> container::Style {
-    container::Style {
-        border: Border {
-            color: BORDER,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..fill(RAIL)
-    }
-}
-
-pub fn header(_: &Theme) -> container::Style {
-    container::Style {
-        border: Border {
-            color: BORDER,
-            width: 1.0,
-            radius: 0.0.into(),
-        },
-        ..fill(MAIN)
-    }
-}
-
 pub fn card(_: &Theme) -> container::Style {
     container::Style {
         border: Border {
@@ -133,23 +117,111 @@ pub fn banner(tone: Color) -> container::Style {
     }
 }
 
-pub fn brand(_: &Theme) -> container::Style {
-    container::Style {
-        border: Border {
-            radius: 14.0.into(),
-            ..Border::default()
-        },
-        ..fill(ACCENT)
-    }
+/// Gedämpfte Avatar-Töne: unterscheidbar, aber keiner lauter als der Akzent.
+const AVATAR_TINTS: [Color; 8] = [
+    color!(0x4c5499),
+    color!(0x2f6f5a),
+    color!(0x80562f),
+    color!(0x7a3f62),
+    color!(0x2f6587),
+    color!(0x67478c),
+    color!(0x3d6d72),
+    color!(0x84484c),
+];
+
+/// Fester Ton je Name, damit dieselbe Person überall gleich aussieht.
+pub fn avatar_tint(name: &str) -> Color {
+    let hash = name.bytes().fold(2_166_136_261_u32, |h, b| {
+        (h ^ u32::from(b)).wrapping_mul(16_777_619)
+    });
+    AVATAR_TINTS[hash as usize % AVATAR_TINTS.len()]
 }
 
-pub fn avatar(_: &Theme) -> container::Style {
+pub fn avatar(tint: Color) -> container::Style {
     container::Style {
         border: Border {
             radius: 999.0.into(),
             ..Border::default()
         },
-        ..fill(color!(0x3a4150))
+        ..fill(tint)
+    }
+}
+
+/// Statuspunkt am Avatar; der Ring in Flächenfarbe schneidet ihn frei.
+pub fn status_dot(color: Color, ring: Color) -> container::Style {
+    container::Style {
+        border: Border {
+            color: ring,
+            width: 2.5,
+            radius: 999.0.into(),
+        },
+        ..fill(color)
+    }
+}
+
+pub fn divider(_: &Theme) -> container::Style {
+    fill(BORDER)
+}
+
+/// Runde Fläche hinter Icons in Leerzuständen.
+pub fn badge(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: 999.0.into(),
+            ..Border::default()
+        },
+        ..fill(ACTIVE)
+    }
+}
+
+/// Markenfläche auf dem Login-Bildschirm.
+pub fn brand_soft(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: 16.0.into(),
+            ..Border::default()
+        },
+        ..fill(ACTIVE)
+    }
+}
+
+pub fn tooltip(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: BORDER_STRONG,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        shadow: Shadow {
+            color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
+            offset: iced::Vector::new(0.0, 2.0),
+            blur_radius: 8.0,
+        },
+        ..fill(RAIL)
+    }
+}
+
+/// Eingabezeile unten: Feld und Senden-Knopf teilen sich eine Fläche.
+pub fn composer(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: BORDER_STRONG,
+            width: 1.0,
+            radius: 10.0.into(),
+        },
+        ..fill(RAISED)
+    }
+}
+
+/// Textfeld ohne eigenen Rahmen, sitzt in [`composer`].
+pub fn bare_input(_: &Theme, _status: text_input::Status) -> text_input::Style {
+    text_input::Style {
+        background: Background::Color(Color::TRANSPARENT),
+        border: Border::default(),
+        icon: MUTED,
+        placeholder: FAINT,
+        value: TEXT,
+        selection: ACTIVE,
     }
 }
 
@@ -208,6 +280,36 @@ pub fn link(_: &Theme, status: button::Status) -> button::Style {
     base_button(None, color, 6.0)
 }
 
+/// Quadratischer Icon-Knopf; `on` markiert einen eingeschalteten Schalter.
+pub fn icon_button(_: &Theme, status: button::Status, on: bool) -> button::Style {
+    let background = match status {
+        _ if on => Some(ACTIVE),
+        button::Status::Hovered | button::Status::Pressed => Some(HOVER),
+        _ => None,
+    };
+    base_button(background, MUTED, 6.0)
+}
+
+/// Icon-Knopf für Gefährliches (Abmelden): färbt sich beim Hover rot ein.
+pub fn danger_icon_button(_: &Theme, status: button::Status) -> button::Style {
+    let background = match status {
+        button::Status::Hovered | button::Status::Pressed => Some(Color { a: 0.14, ..DANGER }),
+        _ => None,
+    };
+    base_button(background, MUTED, 6.0)
+}
+
+/// Senden-Knopf im Composer: Akzentfläche nur, wenn es etwas zu senden gibt.
+pub fn send_button(_: &Theme, status: button::Status) -> button::Style {
+    match status {
+        button::Status::Hovered | button::Status::Pressed => {
+            base_button(Some(ACCENT_HOVER), ON_ACCENT, 8.0)
+        }
+        button::Status::Active => base_button(Some(ACCENT), ON_ACCENT, 8.0),
+        button::Status::Disabled => base_button(None, FAINT, 8.0),
+    }
+}
+
 pub fn channel_button(_: &Theme, status: button::Status, active: bool) -> button::Style {
     let background = if active {
         Some(ACTIVE)
@@ -219,13 +321,24 @@ pub fn channel_button(_: &Theme, status: button::Status, active: bool) -> button
     base_button(background, TEXT, 6.0)
 }
 
+/// Server in der linken Leiste: rund im Ruhezustand, abgerundetes Quadrat bei
+/// Hover, aktiv mit Akzentring statt voller Akzentfläche — so bleibt der Akzent
+/// für Aktionen reserviert und das Logo darüber verwechselt man nicht.
 pub fn rail_button(_: &Theme, status: button::Status, active: bool) -> button::Style {
-    let (background, radius) = if active {
-        (ACCENT, 14.0)
-    } else if matches!(status, button::Status::Hovered | button::Status::Pressed) {
-        (color!(0x2a303b), 14.0)
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    let (background, radius, border) = if active {
+        (ACTIVE, 14.0, ACCENT)
+    } else if hovered {
+        (color!(0x2a303b), 14.0, Color::TRANSPARENT)
     } else {
-        (RAISED, 24.0)
+        (RAISED, 24.0, Color::TRANSPARENT)
     };
-    base_button(Some(background), TEXT, radius)
+    button::Style {
+        border: Border {
+            color: border,
+            width: if active { 2.0 } else { 0.0 },
+            radius: radius.into(),
+        },
+        ..base_button(Some(background), TEXT, radius)
+    }
 }

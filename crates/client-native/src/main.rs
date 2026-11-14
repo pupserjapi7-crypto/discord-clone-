@@ -7,6 +7,7 @@
 
 mod api;
 mod gateway;
+mod icon;
 mod style;
 mod update;
 
@@ -15,12 +16,15 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use iced::futures::channel::mpsc::UnboundedSender;
-use iced::widget::{button, column, container, row, scrollable, space, text, text_input};
+use iced::widget::{
+    button, column, container, row, scrollable, space, stack, text, text_input, tooltip,
+};
 use iced::{Color, Element, Fill, Length, Subscription, Task, Theme};
 use nova_common::protocol::{Event, MessageView};
 
 use api::{Api, Channel, GuildDetail, User};
 use gateway::{Command, GatewayEvent, Status};
+use icon::{Icon, icon, icon_hover};
 
 const DEFAULT_SERVER: &str = "https://85-215-175-202.sslip.io";
 
@@ -526,10 +530,17 @@ impl App {
             );
         }
         let page = match self.screen {
-            Screen::Booting => container(text("Sitzung wird geprüft…").color(style::MUTED))
-                .center(Fill)
-                .style(style::app_bg)
-                .into(),
+            Screen::Booting => container(
+                column![
+                    icon(Icon::Logo, 40.0, style::ACCENT),
+                    text("Sitzung wird geprüft…").color(style::MUTED),
+                ]
+                .spacing(16)
+                .align_x(iced::Center),
+            )
+            .center(Fill)
+            .style(style::app_bg)
+            .into(),
             Screen::Login => self.view_login(),
             Screen::Chat => self.view_chat(),
         };
@@ -613,6 +624,50 @@ impl App {
             .into()
     }
 
+    /// Kompakte Variante für die Nutzerleiste: Icon, Stand im Tooltip.
+    fn view_update_icon(&self) -> Element<'_, Message> {
+        let (glyph, color, label, message) = match &self.update {
+            UpdateState::Available(a) => (
+                Icon::Download,
+                style::ACCENT,
+                format!("Update auf v{} installieren", a.version),
+                Some(Message::InstallUpdate),
+            ),
+            UpdateState::Checking => (
+                Icon::Refresh,
+                style::FAINT,
+                "Suche Updates…".to_owned(),
+                None,
+            ),
+            UpdateState::Installing(_) => (
+                Icon::Download,
+                style::FAINT,
+                "Wird installiert…".to_owned(),
+                None,
+            ),
+            UpdateState::UpToDate => (
+                Icon::Refresh,
+                style::MUTED,
+                format!("v{} ist aktuell · erneut prüfen", update::CURRENT),
+                Some(Message::CheckUpdate),
+            ),
+            UpdateState::Idle | UpdateState::Failed(_) => (
+                Icon::Refresh,
+                style::MUTED,
+                format!("v{} · nach Updates suchen", update::CURRENT),
+                Some(Message::CheckUpdate),
+            ),
+        };
+        tip(
+            button(icon_hover(glyph, 18.0, color, style::TEXT))
+                .padding(7)
+                .on_press_maybe(message)
+                .style(|theme, status| style::icon_button(theme, status, false)),
+            label,
+            tooltip::Position::Top,
+        )
+    }
+
     fn view_login(&self) -> Element<'_, Message> {
         let submit_label = if self.busy {
             "Einen Moment…"
@@ -621,84 +676,128 @@ impl App {
         } else {
             "Anmelden"
         };
-        let mut form = column![
-            container(text("N").size(28).color(style::TEXT))
-                .center(56)
-                .style(style::brand),
-            text("Nova").size(28).color(style::TEXT),
-            text("Sprich. Teile. Bleib verbunden.").color(style::MUTED),
-            space().height(8),
-            text("Server").size(13).color(style::MUTED),
-            text_input("https://…", &self.server)
-                .on_input(Message::ServerChanged)
-                .padding(10)
-                .style(style::input),
-            text("Handle").size(13).color(style::MUTED),
-            text_input("dein_name", &self.handle)
-                .on_input(Message::HandleChanged)
-                .on_submit(Message::Submit)
-                .padding(10)
-                .style(style::input),
-            text("Passwort").size(13).color(style::MUTED),
-            text_input("••••••••", &self.password)
-                .on_input(Message::PasswordChanged)
-                .on_submit(Message::Submit)
-                .secure(true)
-                .padding(10)
-                .style(style::input),
+        let subtitle = if self.register {
+            "Leg dir in wenigen Sekunden ein Konto an."
+        } else {
+            "Melde dich an, um weiterzuschreiben."
+        };
+        let head = column![
+            container(icon(Icon::Logo, 32.0, style::ACCENT))
+                .center(60)
+                .style(style::brand_soft),
+            space().height(6),
+            text("Nova")
+                .size(26)
+                .font(style::SEMIBOLD)
+                .color(style::TEXT),
+            text(subtitle).size(14).color(style::MUTED),
         ]
-        .spacing(8)
+        .spacing(4)
+        .width(Fill)
         .align_x(iced::Center);
+
+        let mut form = column![
+            head,
+            space().height(10),
+            field(
+                "Server",
+                text_input("https://…", &self.server)
+                    .on_input(Message::ServerChanged)
+                    .padding(10)
+                    .style(style::input),
+            ),
+            field(
+                "Handle",
+                text_input("dein_name", &self.handle)
+                    .on_input(Message::HandleChanged)
+                    .on_submit(Message::Submit)
+                    .padding(10)
+                    .style(style::input),
+            ),
+            field(
+                "Passwort",
+                text_input("Mindestens 8 Zeichen", &self.password)
+                    .on_input(Message::PasswordChanged)
+                    .on_submit(Message::Submit)
+                    .secure(true)
+                    .padding(10)
+                    .style(style::input),
+            ),
+        ]
+        .spacing(14);
         if let Some(err) = &self.auth_error {
             form = form.push(text(err).color(style::DANGER).size(13));
         }
         form = form
-            .push(
-                button(text(submit_label).center().width(Fill))
-                    .on_press_maybe((!self.busy).then_some(Message::Submit))
-                    .width(Fill)
-                    .padding(12)
-                    .style(style::primary),
-            )
+            .push(space().height(2))
             .push(
                 button(
-                    text(if self.register {
-                        "Schon ein Konto? Anmelden"
-                    } else {
-                        "Neu hier? Konto erstellen"
-                    })
-                    .size(13),
+                    text(submit_label)
+                        .font(style::SEMIBOLD)
+                        .center()
+                        .width(Fill),
                 )
-                .on_press(Message::ToggleRegister)
-                .style(style::link),
+                .on_press_maybe((!self.busy).then_some(Message::Submit))
+                .width(Fill)
+                .padding(12)
+                .style(style::primary),
             )
-            .push(text("Nativ · Rust · iced").size(11).color(style::FAINT))
-            .push(self.view_update_button());
+            .push(
+                container(
+                    button(
+                        text(if self.register {
+                            "Schon ein Konto? Anmelden"
+                        } else {
+                            "Neu hier? Konto erstellen"
+                        })
+                        .size(13),
+                    )
+                    .on_press(Message::ToggleRegister)
+                    .style(style::link),
+                )
+                .center_x(Fill),
+            );
 
-        container(container(form.width(340)).padding(32).style(style::card))
-            .center(Fill)
-            .style(style::app_bg)
-            .into()
+        let footer = row![
+            text("Nativ · Rust").size(11).color(style::FAINT),
+            text("·").size(11).color(style::FAINT),
+            self.view_update_button(),
+        ]
+        .spacing(2)
+        .align_y(iced::Center);
+
+        container(
+            column![
+                container(form.width(340)).padding(32).style(style::card),
+                footer,
+            ]
+            .spacing(14)
+            .align_x(iced::Center),
+        )
+        .center(Fill)
+        .style(style::app_bg)
+        .into()
     }
 
     fn view_chat(&self) -> Element<'_, Message> {
         let mut layout = row![self.view_rail(), self.view_sidebar(), self.view_main()];
         if self.show_members && self.detail.is_some() {
-            layout = layout.push(self.view_members());
+            layout = layout.push(vline(Fill)).push(self.view_members());
         }
         let mut page = column![layout.height(Fill)];
         if let Some(err) = &self.error {
             page = page.push(
                 container(
                     row![
-                        text(err).color(style::TEXT).width(Fill),
-                        button(text("×"))
+                        text(err).size(13).color(style::TEXT).width(Fill),
+                        button(icon(Icon::Close, 14.0, style::MUTED))
+                            .padding(6)
                             .on_press(Message::DismissError)
-                            .style(style::ghost),
+                            .style(|theme, status| style::icon_button(theme, status, false)),
                     ]
                     .align_y(iced::Center),
                 )
-                .padding([6, 12])
+                .padding([4, 12])
                 .style(style::toast),
             );
         }
@@ -713,27 +812,34 @@ impl App {
         let current = self.detail.as_ref().map(|d| d.guild.id);
         let guilds = self.guilds.iter().map(|guild| {
             let active = current == Some(guild.id);
-            button(
-                text(initials(&guild.name))
-                    .center()
-                    .width(Fill)
-                    .color(style::TEXT),
+            tip(
+                button(
+                    text(initials(&guild.name))
+                        .size(15)
+                        .font(style::SEMIBOLD)
+                        .center()
+                        .width(Fill)
+                        .height(Fill)
+                        .color(style::TEXT),
+                )
+                .width(48)
+                .height(48)
+                .padding(0)
+                .on_press(Message::OpenGuild(guild.id))
+                .style(move |theme, status| style::rail_button(theme, status, active)),
+                guild.name.as_str(),
+                tooltip::Position::Right,
             )
-            .width(48)
-            .height(48)
-            .padding([14, 0])
-            .on_press(Message::OpenGuild(guild.id))
-            .style(move |theme, status| style::rail_button(theme, status, active))
-            .into()
         });
+        // Die Bildmarke ist bewusst keine Kachel: kein Hintergrund, kein Klick,
+        // darunter ein Trenner — Server beginnen erst danach.
         container(
             column![
-                container(text("N").size(20).color(style::TEXT))
-                    .center(48)
-                    .style(style::brand),
+                container(icon(Icon::Logo, 26.0, style::ACCENT)).center(48),
+                container(space()).width(32).height(2).style(style::divider),
                 column(guilds).spacing(8),
             ]
-            .spacing(12)
+            .spacing(10)
             .align_x(iced::Center),
         )
         .width(72)
@@ -752,40 +858,61 @@ impl App {
         let mut channels = column![].spacing(2);
         if let Some(detail) = &self.detail {
             for (label, kind_text) in [("TEXTKANÄLE", true), ("SPRACHKANÄLE", false)] {
-                channels = channels
-                    .push(container(text(label).size(11).color(style::FAINT)).padding([10, 8]));
+                channels = channels.push(section_label(label));
                 for channel in detail
                     .channels
                     .iter()
                     .filter(|c| (c.kind == 0) == kind_text)
                 {
                     let active = self.channel == Some(channel.id);
-                    let prefix = if channel.kind == 0 { "#" } else { "🔊" };
+                    let glyph = if channel.kind == 0 {
+                        Icon::Hash
+                    } else {
+                        Icon::Volume
+                    };
                     channels = channels.push(
                         button(
                             row![
-                                text(prefix).color(style::FAINT).width(18),
+                                icon(
+                                    glyph,
+                                    16.0,
+                                    if active { style::MUTED } else { style::FAINT }
+                                ),
                                 text(&channel.name).color(if active {
                                     style::TEXT
                                 } else {
                                     style::MUTED
                                 }),
                             ]
-                            .spacing(6),
+                            .spacing(8)
+                            .align_y(iced::Center),
                         )
                         .width(Fill)
-                        .padding([6, 8])
+                        .padding([7, 8])
                         .on_press(Message::OpenChannel(channel.id))
                         .style(move |theme, status| style::channel_button(theme, status, active)),
                     );
                 }
             }
         } else {
-            channels =
-                channels.push(container(text("Noch kein Server.").color(style::MUTED)).padding(12));
+            channels = channels.push(
+                container(
+                    column![
+                        text("Noch kein Server")
+                            .font(style::SEMIBOLD)
+                            .color(style::TEXT),
+                        text("Lass dich einladen oder leg in der Web-App einen Server an.")
+                            .size(13)
+                            .color(style::MUTED),
+                    ]
+                    .spacing(4),
+                )
+                .padding([16, 8]),
+            );
         }
 
         let me = self.me.as_ref();
+        let name = me.map(|m| m.display_name.as_str()).unwrap_or("?");
         let (dot, label) = match self.status {
             Status::Online => (style::ONLINE, "Online"),
             Status::Connecting => (style::WARN, "Verbinde…"),
@@ -793,37 +920,43 @@ impl App {
         };
         let me_bar = container(
             row![
-                avatar(me.map(|m| m.display_name.as_str()).unwrap_or("?"), 32),
+                avatar_with_status(name, 32.0, dot, style::RAIL),
                 column![
-                    text(me.map(|m| m.display_name.as_str()).unwrap_or(""))
-                        .size(14)
-                        .color(style::TEXT),
-                    row![
-                        text("●").size(10).color(dot),
-                        text(label).size(12).color(style::MUTED)
-                    ]
-                    .spacing(4),
+                    text(name).size(14).font(style::SEMIBOLD).color(style::TEXT),
+                    text(label).size(12).color(style::MUTED),
                 ]
+                .spacing(1)
                 .width(Fill),
-                button(text("⎋").size(16))
-                    .on_press(Message::Logout)
-                    .style(style::ghost),
+                self.view_update_icon(),
+                tip(
+                    button(icon_hover(Icon::LogOut, 18.0, style::MUTED, style::DANGER))
+                        .padding(7)
+                        .on_press(Message::Logout)
+                        .style(style::danger_icon_button),
+                    "Abmelden",
+                    tooltip::Position::Top,
+                ),
             ]
-            .spacing(8)
+            .spacing(4)
             .align_y(iced::Center),
         )
-        .padding(10)
-        .style(style::me_bar);
+        .padding(iced::Padding {
+            top: 8.0,
+            right: 6.0,
+            bottom: 8.0,
+            left: 10.0,
+        })
+        .style(style::rail);
 
         container(column![
-            container(text(title).size(16).color(style::TEXT))
-                .padding([14, 16])
-                .width(Fill),
+            header_bar(
+                text(title)
+                    .size(15)
+                    .font(style::SEMIBOLD)
+                    .color(style::TEXT)
+            ),
             scrollable(channels.padding([0, 8])).height(Fill),
-            container(self.view_update_button())
-                .padding([2, 8])
-                .width(Fill)
-                .style(style::rail),
+            hline(),
             me_bar,
         ])
         .width(240)
@@ -834,64 +967,78 @@ impl App {
 
     fn view_main(&self) -> Element<'_, Message> {
         let channel = self.current_channel();
-        let header = container(
-            row![
-                text(if channel.map(|c| c.kind == 0).unwrap_or(true) {
-                    "#"
-                } else {
-                    "🔊"
-                })
-                .size(20)
-                .color(style::FAINT),
-                text(
-                    channel
-                        .map(|c| c.name.as_str())
-                        .unwrap_or("Willkommen bei Nova")
-                )
-                .size(16)
-                .color(style::TEXT),
-                text(channel.and_then(|c| c.topic.as_deref()).unwrap_or(""))
-                    .size(13)
-                    .color(style::MUTED)
-                    .width(Fill),
-                button(text("Mitglieder").size(13))
-                    .on_press(Message::ToggleMembers)
-                    .style(style::ghost),
-            ]
-            .spacing(10)
-            .align_y(iced::Center),
-        )
-        .padding([12, 16])
-        .width(Fill)
-        .style(style::header);
-
         let is_voice = channel.map(|c| c.kind != 0).unwrap_or(false);
+
+        let mut title = row![
+            icon(
+                if is_voice { Icon::Volume } else { Icon::Hash },
+                20.0,
+                style::FAINT
+            ),
+            text(channel.map(|c| c.name.as_str()).unwrap_or("Nova"))
+                .size(15)
+                .font(style::SEMIBOLD)
+                .color(style::TEXT),
+        ]
+        .spacing(8)
+        .align_y(iced::Center);
+        if let Some(topic) = channel.and_then(|c| c.topic.as_deref())
+            && !topic.is_empty()
+        {
+            title = title
+                .push(space().width(4))
+                .push(vline(20))
+                .push(space().width(4))
+                .push(text(topic).size(13).color(style::MUTED));
+        }
+        let show = self.show_members;
+        let header = header_bar(
+            row![
+                container(title).width(Fill),
+                tip(
+                    button(icon(
+                        Icon::Users,
+                        18.0,
+                        if show { style::TEXT } else { style::MUTED }
+                    ))
+                    .padding(7)
+                    .on_press(Message::ToggleMembers)
+                    .style(move |theme, status| style::icon_button(theme, status, show)),
+                    if show {
+                        "Mitglieder ausblenden"
+                    } else {
+                        "Mitglieder einblenden"
+                    },
+                    tooltip::Position::Bottom,
+                ),
+            ]
+            .align_y(iced::Center),
+        );
+
+        let Some(channel) = channel else {
+            let body = empty_state(
+                Icon::Hash,
+                "Kein Kanal ausgewählt".to_owned(),
+                "Wähle links einen Kanal, um loszulegen.",
+            );
+            return column![header, body].into();
+        };
         if is_voice {
-            let body = container(
-                column![
-                    text("Sprachkanal").size(22).color(style::TEXT),
-                    text("Voice kommt im nächsten Schritt nativ (str0m + cpal + Opus).")
-                        .color(style::MUTED),
-                ]
-                .spacing(8)
-                .align_x(iced::Center),
-            )
-            .center(Fill);
+            let body = empty_state(
+                Icon::Volume,
+                channel.name.clone(),
+                "Sprache kommt im nächsten Schritt nativ (str0m + cpal + Opus).",
+            );
             return column![header, body].into();
         }
 
         let messages = self.messages();
         let list: Element<'_, Message> = if messages.is_empty() {
-            container(
-                column![
-                    text("Noch keine Nachrichten").size(20).color(style::TEXT),
-                    text("Schreibe die erste Nachricht in diesem Kanal.").color(style::MUTED),
-                ]
-                .spacing(6)
-                .align_x(iced::Center),
+            empty_state(
+                Icon::Message,
+                format!("Willkommen in #{}", channel.name),
+                "Hier ist es noch still. Schreib die erste Nachricht.",
             )
-            .center(Fill)
-            .into()
         } else {
             let items = messages.iter().enumerate().map(|(index, message)| {
                 let grouped = index > 0 && {
@@ -908,10 +1055,13 @@ impl App {
                     row![space().width(48), content].padding([1, 16]).into()
                 } else {
                     row![
-                        avatar(&message.author, 36),
+                        avatar(&message.author, 36.0),
                         column![
                             row![
-                                text(&message.author).color(style::TEXT).size(15),
+                                text(&message.author)
+                                    .font(style::SEMIBOLD)
+                                    .color(style::TEXT)
+                                    .size(15),
                                 text(&message.time).color(style::FAINT).size(12),
                             ]
                             .spacing(8)
@@ -923,7 +1073,7 @@ impl App {
                     ]
                     .spacing(12)
                     .padding(iced::Padding {
-                        top: 12.0,
+                        top: 14.0,
                         right: 16.0,
                         bottom: 1.0,
                         left: 16.0,
@@ -933,33 +1083,57 @@ impl App {
             });
             // `anchor_bottom` hält die Liste unten, solange man unten ist — wer
             // hochgescrollt hat, wird nicht zurückgerissen.
-            scrollable(column(items).padding([0, 0]).push(space().height(12)))
+            scrollable(column(items).push(space().height(12)))
                 .anchor_bottom()
                 .height(Fill)
                 .width(Fill)
                 .into()
         };
 
-        let placeholder = match (channel, self.status) {
-            (Some(c), Status::Online) => format!("Nachricht an #{}", c.name),
-            _ => "Verbinde mit dem Gateway…".to_owned(),
+        let online = self.status == Status::Online;
+        let placeholder = if online {
+            format!("Nachricht an #{}", channel.name)
+        } else {
+            "Verbinde mit dem Gateway…".to_owned()
         };
+        let can_send = online && !self.draft.trim().is_empty();
         let composer = container(
-            row![
-                text_input(&placeholder, &self.draft)
-                    .on_input(Message::DraftChanged)
-                    .on_submit(Message::Send)
-                    .padding(12)
-                    .style(style::input),
-                button(text("Senden"))
-                    .padding([10, 16])
-                    .on_press_maybe((!self.draft.trim().is_empty()).then_some(Message::Send))
-                    .style(style::primary),
-            ]
-            .spacing(8)
-            .align_y(iced::Center),
+            container(
+                row![
+                    text_input(&placeholder, &self.draft)
+                        .on_input(Message::DraftChanged)
+                        .on_submit(Message::Send)
+                        .padding([10, 10])
+                        .style(style::bare_input),
+                    tip(
+                        button(icon(
+                            Icon::Send,
+                            18.0,
+                            if can_send {
+                                style::ON_ACCENT
+                            } else {
+                                style::FAINT
+                            }
+                        ))
+                        .padding(8)
+                        .on_press_maybe(can_send.then_some(Message::Send))
+                        .style(style::send_button),
+                        "Senden (Enter)",
+                        tooltip::Position::Top,
+                    ),
+                ]
+                .spacing(4)
+                .align_y(iced::Center),
+            )
+            .padding([4, 6])
+            .style(style::composer),
         )
-        .padding([12, 16]);
+        .padding(iced::Padding {
+            top: 4.0,
+            right: 16.0,
+            bottom: 16.0,
+            left: 16.0,
+        });
 
         column![header, list, composer]
             .width(Fill)
@@ -971,7 +1145,7 @@ impl App {
         let Some(detail) = &self.detail else {
             return space().into();
         };
-        let mut list = column![].spacing(4);
+        let mut list = column![].spacing(2);
         for (label, online) in [("ONLINE", true), ("OFFLINE", false)] {
             let members: Vec<_> = detail
                 .members
@@ -981,43 +1155,157 @@ impl App {
             if members.is_empty() {
                 continue;
             }
-            list = list.push(
-                container(
-                    text(format!("{label} — {}", members.len()))
-                        .size(11)
-                        .color(style::FAINT),
-                )
-                .padding([10, 4]),
-            );
+            list = list.push(section_label(format!("{label} — {}", members.len())));
             for member in members {
+                let dot = if online { style::ONLINE } else { style::FAINT };
                 list = list.push(
-                    row![
-                        avatar(&member.display_name, 28),
-                        text(&member.display_name)
-                            .color(if online { style::TEXT } else { style::FAINT })
-                            .size(14),
-                    ]
-                    .spacing(8)
-                    .align_y(iced::Center),
+                    container(
+                        row![
+                            avatar_with_status(&member.display_name, 32.0, dot, style::SIDEBAR),
+                            text(&member.display_name)
+                                .color(if online { style::TEXT } else { style::FAINT })
+                                .size(14),
+                        ]
+                        .spacing(10)
+                        .align_y(iced::Center),
+                    )
+                    .padding([4, 8]),
                 );
             }
         }
-        container(scrollable(list.padding([0, 12])).height(Fill))
-            .width(Length::Fixed(220.0))
-            .height(Fill)
-            .style(style::sidebar)
-            .into()
+        container(column![
+            header_bar(
+                text(format!("Mitglieder · {}", detail.members.len()))
+                    .size(13)
+                    .font(style::SEMIBOLD)
+                    .color(style::MUTED)
+            ),
+            scrollable(list.padding([0, 8])).height(Fill),
+        ])
+        .width(Length::Fixed(232.0))
+        .height(Fill)
+        .style(style::sidebar)
+        .into()
     }
 }
 
-fn avatar<'a>(name: &str, size: u16) -> Element<'a, Message> {
+/// Kopfzeile mit fester Höhe und Trennlinie, damit Sidebar, Chat und
+/// Mitgliederliste auf einer Linie abschließen.
+fn header_bar<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    column![
+        container(content)
+            .height(48)
+            .width(Fill)
+            .padding([0, 16])
+            .align_y(iced::Center),
+        hline(),
+    ]
+    .into()
+}
+
+fn hline<'a>() -> Element<'a, Message> {
+    container(space())
+        .width(Fill)
+        .height(1)
+        .style(style::divider)
+        .into()
+}
+
+fn vline<'a>(height: impl Into<Length>) -> Element<'a, Message> {
+    container(space())
+        .width(1)
+        .height(height)
+        .style(style::divider)
+        .into()
+}
+
+fn section_label<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
+    container(
+        text(label)
+            .size(11)
+            .font(style::SEMIBOLD)
+            .color(style::FAINT),
+    )
+    .padding(iced::Padding {
+        top: 18.0,
+        right: 8.0,
+        bottom: 6.0,
+        left: 8.0,
+    })
+    .into()
+}
+
+fn field<'a>(label: &'a str, input: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    column![text(label).size(13).color(style::MUTED), input.into()]
+        .spacing(6)
+        .into()
+}
+
+fn tip<'a>(
+    content: impl Into<Element<'a, Message>>,
+    label: impl text::IntoFragment<'a>,
+    position: tooltip::Position,
+) -> Element<'a, Message> {
+    tooltip(
+        content,
+        container(text(label).size(12).color(style::TEXT))
+            .padding([5, 9])
+            .style(style::tooltip),
+        position,
+    )
+    .gap(6)
+    .into()
+}
+
+fn empty_state<'a>(glyph: Icon, title: String, body: &'a str) -> Element<'a, Message> {
+    container(
+        column![
+            container(icon(glyph, 28.0, style::ACCENT))
+                .center(64)
+                .style(style::badge),
+            space().height(4),
+            text(title)
+                .size(18)
+                .font(style::SEMIBOLD)
+                .color(style::TEXT),
+            text(body).color(style::MUTED),
+        ]
+        .spacing(6)
+        .align_x(iced::Center),
+    )
+    .center(Fill)
+    .into()
+}
+
+fn avatar<'a>(name: &str, size: f32) -> Element<'a, Message> {
+    let tint = style::avatar_tint(name);
     container(
         text(initials(name))
-            .size(f32::from(size) * 0.4)
+            .size(size * 0.38)
+            .font(style::SEMIBOLD)
             .color(style::TEXT),
     )
-    .center(f32::from(size))
-    .style(style::avatar)
+    .center(size)
+    .style(move |_: &Theme| style::avatar(tint))
+    .into()
+}
+
+/// Avatar mit Statuspunkt unten rechts; `ring` ist die Farbe der Fläche dahinter.
+fn avatar_with_status<'a>(name: &str, size: f32, dot: Color, ring: Color) -> Element<'a, Message> {
+    let diameter = (size * 0.36).round().max(10.0);
+    stack![
+        avatar(name, size),
+        container(
+            container(space())
+                .width(diameter)
+                .height(diameter)
+                .style(move |_: &Theme| style::status_dot(dot, ring)),
+        )
+        .width(Fill)
+        .height(Fill)
+        .align_x(iced::alignment::Horizontal::Right)
+        .align_y(iced::alignment::Vertical::Bottom),
+    ]
     .into()
 }
 
