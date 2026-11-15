@@ -61,3 +61,18 @@ x11rb = "0.13"
 [features]
 default = []
 gpu = ["iced/wgpu"]
+
+# Windows-Installer (NSIS) über cargo-packager – reines Rust-Werkzeug, lädt
+# NSIS selbst. Installation pro Benutzer nach %LOCALAPPDATA%, damit der
+# In-App-Updater die exe ohne Adminrechte austauschen kann. Pfade gelten
+# relativ zum Workspace (Aufruf: `cargo packager -p nova-desktop --release`).
+[package.metadata.packager]
+product-name = "Nova Desktop"
+identifier = "dev.nova.native"
+description = "Nativer Nova-Client"
+binaries = [{ path = "nova-desktop", main = true }]
+icons = ["../../desktop/src-tauri/icons/icon.ico", "../../desktop/src-tauri/icons/icon.png"]
+formats = ["nsis"]
+
+[package.metadata.packager.nsis]
+installer-mode = "currentUser"

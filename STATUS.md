@@ -102,6 +102,11 @@ Server-Release-Build waren vor den Änderungen **grün**.
   `getDisplayMedia` im Testbrowser gesperrt). **Nicht getestet:** echtes
   Teilen aus der Web-App, Linux/X11-Aufnahme auf echter Hardware,
   Ende-zu-Ende-Latenz.
+- Windows-Installer für den nativen Client (`cargo-packager`, NSIS, pro
+  Benutzer nach `%LOCALAPPDATA%`, damit der Update-Knopf ohne Adminrechte
+  funktioniert). Release-Asset `nova-desktop-windows-x86_64-setup.exe`.
+  Lokal gebaut (6 MB); eine stille Probeinstallation ließ die Testumgebung
+  nicht zu – **Installation auf echtem Rechner noch ungetestet**.
 
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,

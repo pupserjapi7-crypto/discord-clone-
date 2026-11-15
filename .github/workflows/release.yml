@@ -144,6 +144,15 @@ jobs:
           NOVA_UPDATE_REPO: ${{ github.repository }}
         run: cargo build --release -p nova-desktop
 
+      # Installer (NSIS, pro Benutzer) – Konfiguration in
+      # crates/client-native/Cargo.toml unter [package.metadata.packager].
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version 0.11.8 --locked
+
+      - name: Build installer
+        shell: bash
+        run: cargo packager -p nova-desktop --release --out-dir "$PWD/target/packager" --binaries-dir "$PWD/target/release"
+
       - name: Upload to release
         shell: bash
         env:
@@ -151,9 +160,12 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/nova-desktop.exe dist/nova-desktop-windows-x86_64.exe
+          cp target/packager/nova-desktop_*_x64-setup.exe dist/nova-desktop-windows-x86_64-setup.exe
           cd dist
           sha256sum nova-desktop-windows-x86_64.exe > nova-desktop-windows-x86_64.exe.sha256
-          gh release upload "$GITHUB_REF_NAME" nova-desktop-windows-x86_64.exe nova-desktop-windows-x86_64.exe.sha256 --clobber
+          sha256sum nova-desktop-windows-x86_64-setup.exe > nova-desktop-windows-x86_64-setup.exe.sha256
+          gh release upload "$GITHUB_REF_NAME" nova-desktop-windows-x86_64.exe nova-desktop-windows-x86_64.exe.sha256 \
+            nova-desktop-windows-x86_64-setup.exe nova-desktop-windows-x86_64-setup.exe.sha256 --clobber
 
   native-linux:
     needs: publish

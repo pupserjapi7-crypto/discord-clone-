@@ -60,6 +60,20 @@ cargo xtask gallery # Komponenten-Galerie unter /dev/gallery (nur lokal!)
 Release für den VPS: `cargo build --release --target x86_64-unknown-linux-musl -p nova`.
 ## Desktop-Installer
 
+**Nativer Client** (iced, mit Streams): Installer pro Benutzer, ohne Adminrechte.
+
+```powershell
+cargo install cargo-packager --version 0.11.8 --locked
+cargo build --release -p nova-desktop
+cargo packager -p nova-desktop --release --out-dir "$PWD\target\packager" --binaries-dir "$PWD\target\release"
+```
+
+Ergebnis: `target/packager/nova-desktop_<version>_x64-setup.exe`; im Release als
+`nova-desktop-windows-x86_64-setup.exe`. Der Update-Knopf im Client tauscht
+danach die installierte exe aus.
+
+**Tauri-Hülle** (WebView):
+
 ```powershell
 cargo install tauri-cli --version "^2"
 cd desktop
