@@ -199,6 +199,20 @@ pub struct Message {
     pub pinned: bool,
 }
 
+/// Direktnachrichten-Kanal und das Gegenüber.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DmChannel {
+    #[serde(deserialize_with = "id")]
+    pub id: i64,
+    pub user: DmPeer,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DmPeer {
+    pub handle: String,
+    pub display_name: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Invite {
     pub code: String,
@@ -478,6 +492,51 @@ impl Api {
             reqwest::Method::POST,
             &format!("/api/v1/invites/{code}"),
             Some(serde_json::json!({})),
+        )
+        .await
+    }
+
+    // ------------------------------------------------------ Direktnachrichten
+
+    pub async fn dms(&self) -> Result<Vec<DmChannel>, String> {
+        self.request(reqwest::Method::GET, "/api/v1/users/@me/dms", None)
+            .await
+    }
+
+    /// DM mit jemandem über den Benutzernamen öffnen (legt ihn bei Bedarf an).
+    pub async fn open_dm(&self, handle: &str) -> Result<DmChannel, String> {
+        let handle = handle.trim().trim_start_matches('@');
+        if handle.is_empty() {
+            return Err("Bitte einen Benutzernamen eingeben.".into());
+        }
+        self.request(
+            reqwest::Method::POST,
+            "/api/v1/users/@me/dms",
+            Some(serde_json::json!({ "handle": handle })),
+        )
+        .await
+        .map_err(|err| match err.as_str() {
+            "not found" => format!("Niemanden mit dem Namen „{handle}“ gefunden."),
+            "you cannot message yourself" => "Dir selbst kannst du nicht schreiben.".into(),
+            _ => err,
+        })
+    }
+
+    pub async fn dm_messages(&self, dm: i64, before: Option<i64>) -> Result<Vec<Message>, String> {
+        let before = before.map(|id| format!("&before={id}")).unwrap_or_default();
+        self.request(
+            reqwest::Method::GET,
+            &format!("/api/v1/dms/{dm}/messages?limit=50{before}"),
+            None,
+        )
+        .await
+    }
+
+    pub async fn send_dm(&self, dm: i64, content: &str) -> Result<Message, String> {
+        self.request(
+            reqwest::Method::POST,
+            &format!("/api/v1/dms/{dm}/messages"),
+            Some(serde_json::json!({ "content": content })),
         )
         .await
     }

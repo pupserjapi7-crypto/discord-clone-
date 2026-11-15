@@ -104,6 +104,7 @@ Server-Typen.
 | `guild_member_update` | `guild_id`, `user_id`, `timeout_until` | 0.4 |
 | `message_pin` | `channel_id`, `message_id`, `pinned` | 0.4 |
 | `voice_state_update` | `guild_id`, `channel_id`, `user_id`, `connected`, `muted`, `deafened`, `screen` | 0.4 |
+| `dm_message_create` | `message` (`channel_id` = DM-Kanal) – nur an beide Beteiligten; Bots haben keine DMs | 0.6 |
 
 Unbekannte Events müssen ignoriert werden – der Server fügt neue hinzu, ohne
 die Protokollversion zu ändern.

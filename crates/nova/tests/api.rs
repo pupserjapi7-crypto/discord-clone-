@@ -898,3 +898,105 @@ async fn gateway_rejects_non_members() {
         matches!(error, ServerOp::Error { nonce: Some(7), ref code, .. } if code == "forbidden")
     );
 }
+
+#[tokio::test]
+async fn direct_messages_open_send_list_and_stay_private() {
+    let url = db_or_skip!();
+    let base = spawn_server(&url).await;
+    let alice = Client::register(&base, "dma").await;
+    let bob = Client::register(&base, "dmb").await;
+    let eve = Client::register(&base, "dme").await;
+    let (_, bob_me) = bob.get("/api/v1/users/@me").await;
+    let bob_handle = bob_me["handle"].as_str().expect("handle").to_owned();
+
+    // Bob hört über das Gateway mit.
+    let ws_url = format!("{}/gateway", base.replacen("http", "ws", 1));
+    let (socket, _) = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .expect("connect");
+    let (mut sink, mut stream) = socket.split();
+    sink.send(WsMessage::Binary(
+        protocol::encode(
+            protocol::OP_HELLO,
+            0,
+            &ClientOp::Hello {
+                token: bob.token.clone(),
+                resume: None,
+            },
+        )
+        .expect("encode"),
+    ))
+    .await
+    .expect("hello");
+    next_frame(&mut stream, protocol::OP_HELLO_OK).await;
+
+    // Unbekannte Namen und man selbst sind kein Gegenüber.
+    let (status, _) = alice
+        .post(
+            "/api/v1/users/@me/dms",
+            json!({ "handle": "gibt-es-nicht-xyz" }),
+        )
+        .await;
+    assert_eq!(status, 404);
+    let (_, alice_me) = alice.get("/api/v1/users/@me").await;
+    let (status, _) = alice
+        .post(
+            "/api/v1/users/@me/dms",
+            json!({ "handle": alice_me["handle"] }),
+        )
+        .await;
+    assert_eq!(status, 400);
+
+    // Öffnen ist idempotent, auch mit "@" und anderer Schreibweise.
+    let (status, dm) = alice
+        .post("/api/v1/users/@me/dms", json!({ "handle": bob_handle }))
+        .await;
+    assert_eq!(status, 200, "{dm}");
+    let dm_id = dm["id"].as_str().expect("dm id").to_owned();
+    assert_eq!(dm["user"]["id"].as_str(), Some(bob.id.as_str()));
+    let (_, again) = bob
+        .post(
+            "/api/v1/users/@me/dms",
+            json!({ "handle": format!("@{}", alice_me["handle"].as_str().unwrap().to_uppercase()) }),
+        )
+        .await;
+    assert_eq!(again["id"].as_str(), Some(dm_id.as_str()));
+
+    let (status, sent) = alice
+        .post(
+            &format!("/api/v1/dms/{dm_id}/messages"),
+            json!({ "content": "Hallo Bob" }),
+        )
+        .await;
+    assert_eq!(status, 201, "{sent}");
+    let event: Event = protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
+        .expect("dispatch");
+    match event {
+        Event::DmMessageCreate { message } => {
+            assert_eq!(message.content, "Hallo Bob");
+            assert_eq!(message.channel_id.to_string(), dm_id);
+            assert_eq!(message.author.id.to_string(), alice.id);
+        }
+        other => panic!("unerwartetes Event: {other:?}"),
+    }
+
+    let (status, history) = bob.get(&format!("/api/v1/dms/{dm_id}/messages")).await;
+    assert_eq!(status, 200);
+    assert_eq!(history[0]["content"], "Hallo Bob");
+    let (_, list) = bob.get("/api/v1/users/@me/dms").await;
+    assert_eq!(list[0]["id"].as_str(), Some(dm_id.as_str()));
+    assert_eq!(list[0]["user"]["id"].as_str(), Some(alice.id.as_str()));
+
+    // Dritte sehen weder Verlauf noch dürfen sie schreiben.
+    let (status, _) = eve.get(&format!("/api/v1/dms/{dm_id}/messages")).await;
+    assert_eq!(status, 404);
+    let (status, _) = eve
+        .post(
+            &format!("/api/v1/dms/{dm_id}/messages"),
+            json!({ "content": "Einbruch" }),
+        )
+        .await;
+    assert_eq!(status, 404);
+    let (_, eve_list) = eve.get("/api/v1/users/@me/dms").await;
+    assert_eq!(eve_list.as_array().map(Vec::len), Some(0));
+}

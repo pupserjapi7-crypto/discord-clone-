@@ -271,6 +271,18 @@ struct App {
     /// Kanäle, für die es keine älteren Nachrichten mehr gibt.
     history_complete: HashSet<i64>,
 
+    /// Direktnachrichten statt eines Servers anzeigen.
+    home: bool,
+    /// Eigene DM-Kanäle, zuletzt aktive zuerst.
+    dms: Vec<api::DmChannel>,
+    /// Offener DM-Kanal.
+    dm: Option<i64>,
+    /// Eingabe „Benutzername“ zum Starten einer Unterhaltung.
+    dm_input: String,
+    dm_busy: bool,
+    dm_error: Option<String>,
+    dm_unread: HashSet<i64>,
+
     prefs: prefs::Prefs,
     devices: (Vec<String>, Vec<String>),
     ptt_held: bool,
@@ -339,6 +351,18 @@ enum Message {
     ArchiveThread(i64),
     LoadOlder,
     OlderLoaded(i64, Result<Vec<api::Message>, String>),
+
+    OpenHome,
+    SelectGuild(i64),
+    DmsLoaded(Result<Vec<api::DmChannel>, String>),
+    OpenDm(i64),
+    DmInput(String),
+    StartDm,
+    /// Unterhaltung mit diesem Benutzernamen öffnen (Eingabe oder Profilkarte).
+    DmWith(String),
+    DmOpened(Result<api::DmChannel, String>),
+    /// (DM-Kanal, Nonce des Platzhalters, Antwort)
+    DmSent(i64, u64, Result<api::Message, String>),
 
     AskConfirm(Option<ModAction>),
     Moderate(i64, ModAction),
@@ -411,6 +435,13 @@ impl App {
             typing: HashMap::new(),
             last_typing_sent: None,
             history_complete: HashSet::new(),
+            home: false,
+            dms: Vec::new(),
+            dm: None,
+            dm_input: String::new(),
+            dm_busy: false,
+            dm_error: None,
+            dm_unread: HashSet::new(),
             prefs: prefs::Prefs::load(),
             devices: (Vec::new(), Vec::new()),
             ptt_held: false,
@@ -451,15 +482,23 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        // Hover-Effekte zeichnet iced sonst ohne `update` neu – mit altem
+        // Hintergrund, also nur in Teilbereichen, und tiny-skia hinterlässt
+        // dabei schwarze oder veraltete Flächen. Jede Mausaktion läuft deshalb
+        // einmal durch `update`, damit `style` ein volles Bild erzwingt.
+        let pointer = iced::event::listen_with(|event, _, _| match event {
+            iced::Event::Mouse(_) => Some(Message::Ignore),
+            _ => None,
+        });
         if self.screen != Screen::Chat {
-            return Subscription::none();
+            return pointer;
         }
         let gateway = gateway::subscription(gateway::Params {
             epoch: self.epoch,
             api: self.api.clone(),
         })
         .map(Message::Gateway);
-        let mut subs = vec![gateway, keyboard::listen().map(Message::Key)];
+        let mut subs = vec![gateway, pointer, keyboard::listen().map(Message::Key)];
         if self.voice.is_some() {
             // Sprecher-Ring und Status fünfmal pro Sekunde; läuft ein Stream,
             // so oft wie Bilder kommen (30 fps).
@@ -541,10 +580,48 @@ impl App {
     }
 
     fn messages(&self) -> &[ChatMessage] {
-        self.channel
+        (if self.home { self.dm } else { self.channel })
             .and_then(|id| self.history.get(&id))
             .map(Vec::as_slice)
             .unwrap_or(&[])
+    }
+
+    /// DM-Kanal in der Liste nach oben schieben (neueste Aktivität zuerst).
+    fn bump_dm(&mut self, id: i64) {
+        if let Some(pos) = self.dms.iter().position(|d| d.id == id)
+            && pos > 0
+        {
+            let dm = self.dms.remove(pos);
+            self.dms.insert(0, dm);
+        }
+    }
+
+    /// Direktnachricht per REST senden; bis zur Antwort steht ein Platzhalter da.
+    fn send_dm(&mut self) -> Task<Message> {
+        let content = self.draft.trim().to_owned();
+        let (Some(dm), Some(me)) = (self.dm, self.me.clone()) else {
+            return Task::none();
+        };
+        if content.is_empty() {
+            return Task::none();
+        }
+        let nonce = self.next_nonce;
+        self.next_nonce += 1;
+        let mut local = ChatMessage::build(
+            None,
+            me.id,
+            me.display_name,
+            content.clone(),
+            chrono::Utc::now(),
+        );
+        local.nonce = Some(nonce);
+        self.history.entry(dm).or_default().push(local);
+        self.draft.clear();
+        let api = self.api.clone();
+        Task::perform(
+            async move { api.send_dm(dm, &content).await },
+            move |result| Message::DmSent(dm, nonce, result),
+        )
     }
 
     fn current_channel(&self) -> Option<&Channel> {
@@ -562,7 +639,14 @@ impl App {
             eprintln!("[nova] angemeldet nach {} ms", start.elapsed().as_millis());
         }
         let api = self.api.clone();
-        Task::perform(async move { api.guilds().await }, Message::GuildsLoaded)
+        let guilds = Task::perform(async move { api.guilds().await }, Message::GuildsLoaded);
+        // Nur Debug-Builds: `NOVA_DEV_DM=<benutzername>` öffnet die Unterhaltung.
+        match std::env::var("NOVA_DEV_DM") {
+            Ok(handle) if cfg!(debug_assertions) => {
+                Task::batch([guilds, Task::done(Message::DmWith(handle))])
+            }
+            _ => guilds,
+        }
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -694,7 +778,8 @@ impl App {
             Message::DraftChanged(value) => {
                 self.draft = value;
                 // Höchstens alle 4 s „tippt“ senden.
-                if let Some(channel_id) = self.channel
+                if !self.home
+                    && let Some(channel_id) = self.channel
                     && !self.draft.is_empty()
                     && self
                         .last_typing_sent
@@ -704,6 +789,7 @@ impl App {
                     self.send_gateway(Command::Typing(channel_id));
                 }
             }
+            Message::Send if self.home => return self.send_dm(),
             Message::Send => {
                 let content = self.draft.trim().to_owned();
                 let (Some(channel_id), Some(me)) = (self.channel, self.me.clone()) else {
@@ -755,6 +841,12 @@ impl App {
                 self.guilds.clear();
                 self.history.clear();
                 self.channel = None;
+                self.home = false;
+                self.dms.clear();
+                self.dm = None;
+                self.dm_input.clear();
+                self.dm_error = None;
+                self.dm_unread.clear();
                 self.modal = None;
                 self.editing = None;
                 self.unread.clear();
@@ -1098,7 +1190,8 @@ impl App {
                 );
             }
             Message::LoadOlder => {
-                let Some(channel) = self.channel else {
+                let home = self.home;
+                let Some(channel) = (if home { self.dm } else { self.channel }) else {
                     return Task::none();
                 };
                 let Some(oldest) = self
@@ -1110,7 +1203,13 @@ impl App {
                 };
                 let api = self.api.clone();
                 return Task::perform(
-                    async move { api.older_messages(channel, oldest).await },
+                    async move {
+                        if home {
+                            api.dm_messages(channel, Some(oldest)).await
+                        } else {
+                            api.older_messages(channel, oldest).await
+                        }
+                    },
                     move |result| Message::OlderLoaded(channel, result),
                 );
             }
@@ -1124,6 +1223,91 @@ impl App {
                 older.retain(|m| !current.iter().any(|c| c.id == m.id));
                 older.append(current);
                 *current = older;
+            }
+
+            // --- Direktnachrichten ---------------------------------------
+            Message::OpenHome => {
+                self.home = true;
+                self.editing = None;
+                let api = self.api.clone();
+                return Task::perform(async move { api.dms().await }, Message::DmsLoaded);
+            }
+            Message::SelectGuild(id) => {
+                self.home = false;
+                self.editing = None;
+                return self.update(Message::OpenGuild(id));
+            }
+            Message::DmsLoaded(Ok(list)) => {
+                self.dms = list;
+                if self.home
+                    && self.dm.is_none()
+                    && let Some(first) = self.dms.first().map(|d| d.id)
+                {
+                    return self.update(Message::OpenDm(first));
+                }
+            }
+            Message::DmsLoaded(Err(err)) => self.dm_error = Some(err),
+            Message::OpenDm(id) => {
+                self.home = true;
+                self.dm = Some(id);
+                self.editing = None;
+                self.dm_unread.remove(&id);
+                let api = self.api.clone();
+                return Task::perform(
+                    async move { api.dm_messages(id, None).await },
+                    move |result| Message::HistoryLoaded(id, result),
+                );
+            }
+            Message::DmInput(value) => {
+                self.dm_input = value;
+                self.dm_error = None;
+            }
+            Message::StartDm => {
+                let handle = self.dm_input.trim().to_owned();
+                if handle.is_empty() || self.dm_busy {
+                    return Task::none();
+                }
+                return self.update(Message::DmWith(handle));
+            }
+            Message::DmWith(handle) => {
+                self.dm_busy = true;
+                self.dm_error = None;
+                self.home = true;
+                self.modal = None;
+                let api = self.api.clone();
+                return Task::perform(async move { api.open_dm(&handle).await }, Message::DmOpened);
+            }
+            Message::DmOpened(Ok(dm)) => {
+                self.dm_busy = false;
+                self.dm_input.clear();
+                let id = dm.id;
+                self.dms.retain(|d| d.id != id);
+                self.dms.insert(0, dm);
+                return self.update(Message::OpenDm(id));
+            }
+            Message::DmOpened(Err(err)) => {
+                self.dm_busy = false;
+                self.dm_error = Some(err);
+            }
+            Message::DmSent(dm, nonce, Ok(sent)) => {
+                let list = self.history.entry(dm).or_default();
+                // Kam die Nachricht schon über das Gateway, ist der Platzhalter
+                // überflüssig; sonst bekommt er jetzt seine ID.
+                let elsewhere = list
+                    .iter()
+                    .any(|m| m.id == Some(sent.id) && m.nonce != Some(nonce));
+                if elsewhere {
+                    list.retain(|m| m.nonce != Some(nonce));
+                } else if let Some(local) = list.iter_mut().find(|m| m.nonce == Some(nonce)) {
+                    local.id = Some(sent.id);
+                }
+                self.bump_dm(dm);
+            }
+            Message::DmSent(dm, nonce, Err(err)) => {
+                if let Some(list) = self.history.get_mut(&dm) {
+                    list.retain(|m| m.nonce != Some(nonce));
+                }
+                self.error = Some(err);
             }
 
             // --- Moderation ----------------------------------------------
@@ -1500,6 +1684,35 @@ impl App {
                         self.mark_read();
                     } else if author != self.me_id() {
                         self.unread.insert(channel_id);
+                    }
+                }
+                Event::DmMessageCreate { message } => {
+                    let dm = message.channel_id;
+                    let incoming = ChatMessage::from_gateway(message);
+                    let mine = incoming.author_id == self.me_id();
+                    let list = self.history.entry(dm).or_default();
+                    if list.iter().any(|m| m.id == incoming.id) {
+                        return Task::none();
+                    }
+                    // Eigene Nachricht aus diesem Fenster: Platzhalter bestätigen.
+                    if mine
+                        && let Some(local) = list
+                            .iter_mut()
+                            .find(|m| m.id.is_none() && m.content == incoming.content)
+                    {
+                        local.id = incoming.id;
+                    } else {
+                        list.push(incoming);
+                    }
+                    if !mine && !(self.home && self.dm == Some(dm)) {
+                        self.dm_unread.insert(dm);
+                    }
+                    if self.dms.iter().any(|d| d.id == dm) {
+                        self.bump_dm(dm);
+                    } else {
+                        // Neue Unterhaltung: Liste samt Gegenüber neu holen.
+                        let api = self.api.clone();
+                        return Task::perform(async move { api.dms().await }, Message::DmsLoaded);
                     }
                 }
                 Event::MessageUpdate { message } => {
@@ -1908,7 +2121,7 @@ impl App {
                 .into();
         }
         let mut layout = row![self.view_rail(), self.view_sidebar(), self.view_main()];
-        if self.show_members && self.detail.is_some() {
+        if self.show_members && self.detail.is_some() && !self.home {
             layout = layout.push(vline(Fill)).push(self.view_members());
         }
         let mut page = column![layout.height(Fill)];
@@ -2189,6 +2402,23 @@ impl App {
         ]
         .spacing(14);
 
+        if member.user_id != Some(self.me_id()) && !member.bot {
+            card = card.push(
+                button(
+                    row![
+                        icon(Icon::Message, 16.0, style::ON_ACCENT),
+                        text("Nachricht senden").size(14).color(style::ON_ACCENT),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Center),
+                )
+                .width(Fill)
+                .padding([8, 12])
+                .on_press(Message::DmWith(member.handle.clone()))
+                .style(style::primary),
+            );
+        }
+
         if let Some(until) = &member.timeout_until {
             let local = chrono::DateTime::parse_from_rfc3339(until)
                 .map(|t| {
@@ -2448,7 +2678,11 @@ impl App {
     }
 
     fn view_rail(&self) -> Element<'_, Message> {
-        let current = self.detail.as_ref().map(|d| d.guild.id);
+        let current = self
+            .detail
+            .as_ref()
+            .map(|d| d.guild.id)
+            .filter(|_| !self.home);
         let guilds = self.guilds.iter().map(|guild| {
             let active = current == Some(guild.id);
             tip(
@@ -2464,7 +2698,7 @@ impl App {
                 .width(48)
                 .height(48)
                 .padding(0)
-                .on_press(Message::OpenGuild(guild.id))
+                .on_press(Message::SelectGuild(guild.id))
                 .style(move |theme, status| style::rail_button(theme, status, active)),
                 guild.name.as_str(),
                 tooltip::Position::Right,
@@ -2487,6 +2721,7 @@ impl App {
         container(
             column![
                 container(icon(Icon::Logo, 26.0, style::ACCENT)).center(48),
+                self.view_dm_button(),
                 container(space()).width(32).height(2).style(style::divider),
                 scrollable(column(guilds).spacing(8)).height(Length::Shrink),
                 rail_action(Icon::Plus, "Server erstellen", Modal::CreateGuild),
@@ -2502,7 +2737,59 @@ impl App {
         .into()
     }
 
+    /// Eigene Leiste unten links (Name, Status, Einstellungen, Abmelden).
+    fn view_me_bar(&self) -> Element<'_, Message> {
+        let me = self.me.as_ref();
+        let name = me.map(|m| m.display_name.as_str()).unwrap_or("?");
+        let (dot, label) = match self.status {
+            Status::Online => (style::ONLINE, "Online"),
+            Status::Connecting => (style::WARN, "Verbinde…"),
+            Status::Offline => (style::FAINT, "Offline"),
+        };
+        container(
+            row![
+                avatar_with_status(name, 32.0, dot, style::RAIL),
+                column![
+                    text(name).size(14).font(style::SEMIBOLD).color(style::TEXT),
+                    text(label).size(12).color(style::MUTED),
+                ]
+                .spacing(1)
+                .width(Fill),
+                self.view_update_icon(),
+                tip(
+                    button(icon_hover(Icon::Settings, 18.0, style::MUTED, style::TEXT))
+                        .padding(7)
+                        .on_press(Message::OpenModal(Modal::Settings))
+                        .style(|theme, status| style::icon_button(theme, status, false)),
+                    "Einstellungen",
+                    tooltip::Position::Top,
+                ),
+                tip(
+                    button(icon_hover(Icon::LogOut, 18.0, style::MUTED, style::DANGER))
+                        .padding(7)
+                        .on_press(Message::Logout)
+                        .style(style::danger_icon_button),
+                    "Abmelden",
+                    tooltip::Position::Top,
+                ),
+            ]
+            .spacing(4)
+            .align_y(iced::Center),
+        )
+        .padding(iced::Padding {
+            top: 8.0,
+            right: 6.0,
+            bottom: 8.0,
+            left: 10.0,
+        })
+        .style(style::rail)
+        .into()
+    }
+
     fn view_sidebar(&self) -> Element<'_, Message> {
+        if self.home {
+            return self.view_dm_sidebar();
+        }
         let title = self
             .detail
             .as_ref()
@@ -2589,50 +2876,7 @@ impl App {
             );
         }
 
-        let me = self.me.as_ref();
-        let name = me.map(|m| m.display_name.as_str()).unwrap_or("?");
-        let (dot, label) = match self.status {
-            Status::Online => (style::ONLINE, "Online"),
-            Status::Connecting => (style::WARN, "Verbinde…"),
-            Status::Offline => (style::FAINT, "Offline"),
-        };
-        let me_bar = container(
-            row![
-                avatar_with_status(name, 32.0, dot, style::RAIL),
-                column![
-                    text(name).size(14).font(style::SEMIBOLD).color(style::TEXT),
-                    text(label).size(12).color(style::MUTED),
-                ]
-                .spacing(1)
-                .width(Fill),
-                self.view_update_icon(),
-                tip(
-                    button(icon_hover(Icon::Settings, 18.0, style::MUTED, style::TEXT))
-                        .padding(7)
-                        .on_press(Message::OpenModal(Modal::Settings))
-                        .style(|theme, status| style::icon_button(theme, status, false)),
-                    "Einstellungen",
-                    tooltip::Position::Top,
-                ),
-                tip(
-                    button(icon_hover(Icon::LogOut, 18.0, style::MUTED, style::DANGER))
-                        .padding(7)
-                        .on_press(Message::Logout)
-                        .style(style::danger_icon_button),
-                    "Abmelden",
-                    tooltip::Position::Top,
-                ),
-            ]
-            .spacing(4)
-            .align_y(iced::Center),
-        )
-        .padding(iced::Padding {
-            top: 8.0,
-            right: 6.0,
-            bottom: 8.0,
-            left: 10.0,
-        })
-        .style(style::rail);
+        let me_bar = self.view_me_bar();
 
         let mut head = row![
             text(title)
@@ -3078,7 +3322,204 @@ impl App {
         Some(column![bar, video].into())
     }
 
+    /// Knopf „Direktnachrichten“ ganz oben in der Serverleiste.
+    fn view_dm_button(&self) -> Element<'_, Message> {
+        let active = self.home;
+        let unread = !self.dm_unread.is_empty();
+        let glyph = icon_hover(
+            Icon::Message,
+            20.0,
+            if active { style::TEXT } else { style::MUTED },
+            style::TEXT,
+        );
+        let mut face = stack![container(glyph).center(48)];
+        if unread && !active {
+            face = face.push(
+                container(
+                    container(space())
+                        .width(10)
+                        .height(10)
+                        .style(style::unread_dot),
+                )
+                .width(48)
+                .height(48)
+                .align_x(iced::alignment::Horizontal::Right)
+                .padding(4),
+            );
+        }
+        tip(
+            button(face)
+                .width(48)
+                .height(48)
+                .padding(0)
+                .on_press(Message::OpenHome)
+                .style(move |theme, status| style::rail_button(theme, status, active)),
+            "Direktnachrichten",
+            tooltip::Position::Right,
+        )
+    }
+
+    /// Seitenleiste im DM-Modus: Benutzername eingeben, Unterhaltungen.
+    fn view_dm_sidebar(&self) -> Element<'_, Message> {
+        let can_start = !self.dm_busy && !self.dm_input.trim().is_empty();
+        let start = row![
+            text_input("Benutzername", &self.dm_input)
+                .on_input(Message::DmInput)
+                .on_submit(Message::StartDm)
+                .size(13)
+                .padding([8, 10])
+                .style(style::input),
+            tip(
+                button(icon(
+                    Icon::Send,
+                    16.0,
+                    if can_start {
+                        style::ON_ACCENT
+                    } else {
+                        style::FAINT
+                    }
+                ))
+                .padding(8)
+                .on_press_maybe(can_start.then_some(Message::StartDm))
+                .style(style::send_button),
+                "Unterhaltung starten",
+                tooltip::Position::Top,
+            ),
+        ]
+        .spacing(6)
+        .align_y(iced::Center);
+        let mut top = column![
+            text("Schreib jemandem über den Benutzernamen.")
+                .size(12)
+                .color(style::MUTED),
+            start
+        ]
+        .spacing(6);
+        if let Some(err) = &self.dm_error {
+            top = top.push(text(err).size(12).color(style::DANGER));
+        }
+
+        let mut list = column![section_label("UNTERHALTUNGEN")].spacing(2);
+        if self.dms.is_empty() {
+            list = list.push(
+                container(
+                    text("Noch keine Unterhaltungen.")
+                        .size(13)
+                        .color(style::MUTED),
+                )
+                .padding([4, 8]),
+            );
+        }
+        for dm in &self.dms {
+            let active = self.dm == Some(dm.id);
+            let unread = self.dm_unread.contains(&dm.id);
+            let mut name = text(&dm.user.display_name)
+                .size(14)
+                .color(if active || unread {
+                    style::TEXT
+                } else {
+                    style::MUTED
+                })
+                .wrapping(text::Wrapping::None);
+            if unread {
+                name = name.font(style::SEMIBOLD);
+            }
+            let mut line = row![
+                avatar(&dm.user.display_name, 28.0),
+                column![
+                    name,
+                    text(format!("@{}", dm.user.handle))
+                        .size(11)
+                        .color(style::FAINT)
+                        .wrapping(text::Wrapping::None),
+                ]
+                .width(Fill),
+            ]
+            .spacing(10)
+            .align_y(iced::Center);
+            if unread {
+                line = line.push(
+                    container(space())
+                        .width(8)
+                        .height(8)
+                        .style(style::unread_dot),
+                );
+            }
+            list = list.push(
+                button(line)
+                    .width(Fill)
+                    .padding([5, 8])
+                    .on_press(Message::OpenDm(dm.id))
+                    .style(move |theme, status| style::channel_button(theme, status, active)),
+            );
+        }
+
+        container(column![
+            header_bar(
+                text("Direktnachrichten")
+                    .size(15)
+                    .font(style::SEMIBOLD)
+                    .color(style::TEXT)
+            ),
+            container(top).padding([8, 12]),
+            scrollable(list.padding([0, 8])).height(Fill),
+            hline(),
+            self.view_me_bar(),
+        ])
+        .width(240)
+        .height(Fill)
+        .style(style::sidebar)
+        .into()
+    }
+
+    /// Hauptbereich im DM-Modus: Verlauf mit einer Person.
+    fn view_dm_main(&self) -> Element<'_, Message> {
+        let peer = self.dm.and_then(|id| self.dms.iter().find(|d| d.id == id));
+        let Some(peer) = peer else {
+            let header = header_bar(
+                text("Direktnachrichten")
+                    .size(15)
+                    .font(style::SEMIBOLD)
+                    .color(style::TEXT),
+            );
+            let body = empty_state(
+                Icon::Message,
+                "Privat schreiben".to_owned(),
+                "Gib links einen Benutzernamen ein, um eine Unterhaltung zu starten.",
+            );
+            return column![header, body].into();
+        };
+        let header = header_bar(
+            row![
+                avatar(&peer.user.display_name, 24.0),
+                text(&peer.user.display_name)
+                    .size(15)
+                    .font(style::SEMIBOLD)
+                    .color(style::TEXT),
+                text(format!("@{}", peer.user.handle))
+                    .size(13)
+                    .color(style::MUTED),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+        );
+        let list = self.view_history(
+            peer.id,
+            false,
+            format!("Deine Unterhaltung mit {}", peer.user.display_name),
+            "Nur ihr beide könnt diese Nachrichten sehen.",
+        );
+        let composer = self.view_composer(format!("Nachricht an @{}", peer.user.handle), true);
+        column![header, list, space().height(18), composer]
+            .width(Fill)
+            .height(Fill)
+            .into()
+    }
+
     fn view_main(&self) -> Element<'_, Message> {
+        if self.home {
+            return self.view_dm_main();
+        }
         let channel = self.current_channel();
         let is_voice = channel.map(|c| c.kind == 1).unwrap_or(false);
         let is_thread = channel.map(|c| c.kind == 2).unwrap_or(false);
@@ -3171,13 +3612,59 @@ impl App {
             return column![header, self.view_voice(channel)].into();
         }
 
-        let messages = self.messages();
-        let list: Element<'_, Message> = if messages.is_empty() {
-            empty_state(
-                Icon::Message,
-                format!("Willkommen in #{}", channel.name),
-                "Hier ist es noch still. Schreib die erste Nachricht.",
+        let list = self.view_history(
+            channel.id,
+            is_thread,
+            format!("Willkommen in #{}", channel.name),
+            "Hier ist es noch still. Schreib die erste Nachricht.",
+        );
+
+        let online = self.status == Status::Online;
+        let placeholder = if online && channel.slowmode_secs > 0 {
+            format!(
+                "Nachricht an #{} · Slowmode {} s",
+                channel.name, channel.slowmode_secs
             )
+        } else if online {
+            format!("Nachricht an #{}", channel.name)
+        } else {
+            "Verbinde mit dem Gateway…".to_owned()
+        };
+        let composer = self.view_composer(placeholder, online);
+
+        // „… schreibt“ – feste Höhe, damit der Composer nicht springt.
+        let typing_names: Vec<&str> = self
+            .typing
+            .get(&channel.id)
+            .map(|people| people.values().map(|(name, _)| name.as_str()).collect())
+            .unwrap_or_default();
+        let typing_text = match typing_names.as_slice() {
+            [] => String::new(),
+            [one] => format!("{one} schreibt …"),
+            [a, b] => format!("{a} und {b} schreiben …"),
+            _ => "Mehrere schreiben …".to_owned(),
+        };
+        let typing = container(text(typing_text).size(12).color(style::MUTED))
+            .height(18)
+            .padding([0, 20]);
+
+        column![header, list, typing, composer]
+            .width(Fill)
+            .height(Fill)
+            .into()
+    }
+
+    /// Verlauf eines Kanals oder einer Unterhaltung (`key`), unten verankert.
+    fn view_history<'a>(
+        &'a self,
+        key: i64,
+        is_thread: bool,
+        welcome: String,
+        welcome_body: &'a str,
+    ) -> Element<'a, Message> {
+        let messages = self.messages();
+        if messages.is_empty() {
+            empty_state(Icon::Message, welcome, welcome_body)
         } else {
             let items = messages.iter().enumerate().map(|(index, message)| {
                 let grouped = index > 0 && {
@@ -3187,7 +3674,7 @@ impl App {
                 self.view_message(message, grouped, is_thread)
             });
             let mut list = column![];
-            if !self.history_complete.contains(&channel.id) {
+            if !self.history_complete.contains(&key) {
                 list = list.push(
                     container(
                         button(text("Ältere Nachrichten laden").size(13))
@@ -3206,21 +3693,13 @@ impl App {
                 .height(Fill)
                 .width(Fill)
                 .into()
-        };
+        }
+    }
 
-        let online = self.status == Status::Online;
-        let placeholder = if online && channel.slowmode_secs > 0 {
-            format!(
-                "Nachricht an #{} · Slowmode {} s",
-                channel.name, channel.slowmode_secs
-            )
-        } else if online {
-            format!("Nachricht an #{}", channel.name)
-        } else {
-            "Verbinde mit dem Gateway…".to_owned()
-        };
-        let can_send = online && !self.draft.trim().is_empty();
-        let composer = container(
+    /// Eingabezeile; `ready` = Senden ist gerade möglich.
+    fn view_composer(&self, placeholder: String, ready: bool) -> Element<'_, Message> {
+        let can_send = ready && !self.draft.trim().is_empty();
+        container(
             container(
                 row![
                     text_input(&placeholder, &self.draft)
@@ -3256,28 +3735,8 @@ impl App {
             right: 16.0,
             bottom: 16.0,
             left: 16.0,
-        });
-
-        // „… schreibt“ – feste Höhe, damit der Composer nicht springt.
-        let typing_names: Vec<&str> = self
-            .typing
-            .get(&channel.id)
-            .map(|people| people.values().map(|(name, _)| name.as_str()).collect())
-            .unwrap_or_default();
-        let typing_text = match typing_names.as_slice() {
-            [] => String::new(),
-            [one] => format!("{one} schreibt …"),
-            [a, b] => format!("{a} und {b} schreiben …"),
-            _ => "Mehrere schreiben …".to_owned(),
-        };
-        let typing = container(text(typing_text).size(12).color(style::MUTED))
-            .height(18)
-            .padding([0, 20]);
-
-        column![header, list, typing, composer]
-            .width(Fill)
-            .height(Fill)
-            .into()
+        })
+        .into()
     }
 
     /// Eine Nachricht samt Reaktionen; Aktionen erscheinen beim Überfahren.
@@ -3389,7 +3848,7 @@ impl App {
         };
 
         // Unbestätigte oder gerade bearbeitete Nachrichten: keine Werkzeuge.
-        let Some(id) = message.id.filter(|_| editing.is_none()) else {
+        let Some(id) = message.id.filter(|_| editing.is_none() && !self.home) else {
             return content;
         };
         let tool =

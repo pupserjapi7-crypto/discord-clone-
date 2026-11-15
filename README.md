@@ -12,6 +12,7 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 | Rechte | **neu abgesichert** — Nicht-Mitglieder/Gebannte haben keine Rechte mehr (Lücke bis 0.3.0, s. `STATUS.md`) |
 | Moderation | **fertig** — Rollen & Kanal-Overrides, Kick, Bann, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log mit UI |
 | Threads | **fertig** — aus Nachricht starten, Seitenleiste, Archivieren, Ungelesen-Stand |
+| Direktnachrichten | **neu (0.6)** — über den Benutzernamen, live über das Gateway; im nativen Client, Web-App folgt |
 | Bot-API | **fertig** — `nb_`-Tokens für REST + Gateway, Doku `docs/04-bot-api.md`, Beispiel `examples/echo-bot` |
 | Web-UI | **neues Nova-Design** — Tokens `--nv-*`, Dark/Light/System, Command Palette, Voice-Grid, Einstellungen, Galerie `/dev/gallery` |
 | Voice | Verbindung, Sprecher-Ring, Lautstärke pro Person, Push-to-Talk, Ping, Reconnect, `voice_state_update` statt Polling; **Ende-zu-Ende-Latenz noch nicht gemessen** |

@@ -216,6 +216,23 @@ impl Gateway {
         self.dispatch_guild(guild_id, event, None);
     }
 
+    /// Event an alle verbundenen Sessions einer Person (Direktnachrichten).
+    pub fn publish_user(&self, user_id: i64, event: &Event) {
+        let Ok(body) = rmp_serde::to_vec_named(event) else {
+            return;
+        };
+        let body = Bytes::from(body);
+        let sessions: Vec<Arc<Session>> = self
+            .sessions
+            .iter()
+            .filter(|entry| entry.user.id == user_id)
+            .map(|entry| Arc::clone(entry.value()))
+            .collect();
+        for session in sessions {
+            self.push_dispatch(&session, &body);
+        }
+    }
+
     /// Rechte, Rollen, Kanäle oder Timeouts haben sich geändert.
     pub fn invalidate_guild(&self, guild_id: i64) {
         self.perms.invalidate_guild(guild_id);

@@ -2,6 +2,7 @@
 
 mod bots;
 mod channels;
+mod dms;
 pub mod error;
 mod guard;
 mod moderation;
@@ -63,6 +64,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/auth/refresh", post(refresh))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/users/@me", get(me).patch(update_me))
+        .route(
+            "/api/v1/users/@me/dms",
+            get(dms::list_dms).post(dms::open_dm),
+        )
+        .route(
+            "/api/v1/dms/{dm_id}/messages",
+            get(dms::list_dm_messages).post(dms::create_dm_message),
+        )
         .route("/api/v1/guilds", get(list_guilds).post(create_guild))
         .route("/api/v1/guilds/{guild_id}", get(get_guild))
         .route("/api/v1/guilds/{guild_id}/channels", post(create_channel))

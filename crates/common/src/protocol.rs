@@ -158,6 +158,15 @@ pub struct MessageView {
     pub pinned: bool,
 }
 
+/// Direktnachrichten-Kanal aus Sicht der anfragenden Person. Neu in v0.6.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DmChannelView {
+    pub id: i64,
+    /// Das Gegenüber.
+    pub user: UserPublic,
+    pub last_message_at: DateTime<Utc>,
+}
+
 // ---------------------------------------------------------------------------
 // Client -> gateway
 // ---------------------------------------------------------------------------
@@ -359,6 +368,11 @@ pub enum Event {
         deafened: bool,
         screen: bool,
     },
+    /// Neue Direktnachricht. `message.channel_id` ist die ID des DM-Kanals;
+    /// geht an alle Sessions beider Beteiligten. Neu in v0.6.
+    DmMessageCreate {
+        message: MessageView,
+    },
 }
 
 impl Event {
@@ -376,6 +390,7 @@ impl Event {
             Event::GuildMemberUpdate { .. } => "guild_member_update",
             Event::MessagePin { .. } => "message_pin",
             Event::VoiceStateUpdate { .. } => "voice_state_update",
+            Event::DmMessageCreate { .. } => "dm_message_create",
         }
     }
 }
@@ -461,6 +476,27 @@ mod tests {
                 muted: false,
                 deafened: false,
                 screen: true,
+            },
+            Event::DmMessageCreate {
+                message: MessageView {
+                    id: 9,
+                    channel_id: 8,
+                    author: UserPublic {
+                        id: 2,
+                        handle: "a".into(),
+                        display_name: "A".into(),
+                        avatar_url: None,
+                        status: 0,
+                        bot: false,
+                    },
+                    content: "hallo".into(),
+                    created_at: Utc::now(),
+                    edited_at: None,
+                    reply_to: None,
+                    reactions: vec![],
+                    attachments: vec![],
+                    pinned: false,
+                },
             },
         ];
         for event in events {

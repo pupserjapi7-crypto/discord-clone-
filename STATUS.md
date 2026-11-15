@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 15.11.2026 · **Version:** 0.5.0 (Streams im nativen Client)
+**Stand:** 15.11.2026 · **Version:** 0.6.0 (Direktnachrichten, Hover-Zeichenfehler behoben)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
@@ -107,6 +107,29 @@ Server-Release-Build waren vor den Änderungen **grün**.
   funktioniert). Release-Asset `nova-desktop-windows-x86_64-setup.exe`.
   Lokal gebaut (6 MB); eine stille Probeinstallation ließ die Testumgebung
   nicht zu – **Installation auf echtem Rechner noch ungetestet**.
+
+### Direktnachrichten und Hover-Fehler (0.6.0)
+- Direktnachrichten zwischen zwei Personen: Migration `0003_direct_messages`
+  (neue Tabellen `dm_channels`, `dm_messages`), REST `GET/POST
+  /users/@me/dms` (öffnen über den Benutzernamen), `GET/POST
+  /dms/{id}/messages`, Gateway-Event `dm_message_create` an alle Sessions
+  beider Beteiligten (`Gateway::publish_user`). Nur Beteiligte sehen einen
+  Kanal (sonst 404); Bots können keine DMs nutzen; Öffnen und Senden sind
+  rate-limitiert. Integrationstest
+  `direct_messages_open_send_list_and_stay_private`.
+- Nativer Client: Knopf „Direktnachrichten“ oben in der Serverleiste,
+  Benutzername eingeben → Unterhaltung, Liste mit Ungelesen-Punkt, Verlauf
+  mit „Ältere laden“, „Nachricht senden“ in der Profilkarte.
+- **Getestet** (15.11.2026, lokal, zwei native Clients): REST → Client live,
+  Client → Client live, kein Doppel-Eintrag beim Absender.
+- **Nicht gebaut:** DMs in der Web-App (sie ignoriert das neue Event),
+  Bearbeiten/Löschen/Reaktionen in DMs, Blockieren.
+- Hover-Zeichenfehler im nativen Client (schwarze Flächen beim Überfahren):
+  iced zeichnet Hover-Effekte ohne `update` und damit nur in Teilbereichen,
+  das ging mit tiny-skia schief. Jede Mausaktion läuft jetzt durch `update`,
+  damit jedes Bild vollständig gezeichnet wird. Nach einer Maus-Runde über
+  Leiste, Nachrichten und Tooltips keine Reste mehr; das Original-Fehlerbild
+  ließ sich in der Automation nicht gezielt nachstellen.
 
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
