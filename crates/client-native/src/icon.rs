@@ -28,6 +28,14 @@ pub enum Icon {
     Headphones,
     HeadphonesOff,
     PhoneOff,
+    Plus,
+    Pencil,
+    Trash,
+    Pin,
+    Settings,
+    Thread,
+    UserPlus,
+    Archive,
 }
 
 struct Glyph {
@@ -291,6 +299,122 @@ impl<M> canvas::Program<M> for Glyph {
                     b.line_to(p(16.4, 14.2));
                 });
                 frame.stroke(&handset, stroke);
+            }
+            Icon::Plus => {
+                let path = Path::new(|b| {
+                    b.move_to(p(12.0, 5.0));
+                    b.line_to(p(12.0, 19.0));
+                    b.move_to(p(5.0, 12.0));
+                    b.line_to(p(19.0, 12.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::Pencil => {
+                let path = Path::new(|b| {
+                    b.move_to(p(17.0, 3.0));
+                    b.line_to(p(21.0, 7.0));
+                    b.line_to(p(8.0, 20.0));
+                    b.line_to(p(3.0, 21.0));
+                    b.line_to(p(4.0, 16.0));
+                    b.close();
+                    b.move_to(p(14.0, 6.0));
+                    b.line_to(p(18.0, 10.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::Trash => {
+                let path = Path::new(|b| {
+                    b.move_to(p(3.0, 6.0));
+                    b.line_to(p(21.0, 6.0));
+                    b.move_to(p(19.0, 6.0));
+                    b.line_to(p(18.0, 20.0));
+                    b.line_to(p(6.0, 20.0));
+                    b.line_to(p(5.0, 6.0));
+                    b.move_to(p(9.0, 6.0));
+                    b.line_to(p(9.0, 3.0));
+                    b.line_to(p(15.0, 3.0));
+                    b.line_to(p(15.0, 6.0));
+                    b.move_to(p(10.0, 11.0));
+                    b.line_to(p(10.0, 16.0));
+                    b.move_to(p(14.0, 11.0));
+                    b.line_to(p(14.0, 16.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::Pin => {
+                let path = Path::new(|b| {
+                    b.move_to(p(12.0, 17.0));
+                    b.line_to(p(12.0, 22.0));
+                    b.move_to(p(5.0, 17.0));
+                    b.line_to(p(19.0, 17.0));
+                    b.line_to(p(17.0, 12.0));
+                    b.line_to(p(16.0, 4.0));
+                    b.line_to(p(8.0, 4.0));
+                    b.line_to(p(7.0, 12.0));
+                    b.close();
+                    b.move_to(p(7.0, 3.0));
+                    b.line_to(p(17.0, 3.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::Settings => {
+                frame.stroke(&Path::circle(p(12.0, 12.0), 3.0 * scale), stroke);
+                frame.stroke(&Path::circle(p(12.0, 12.0), 7.5 * scale), stroke);
+                let teeth = Path::new(|b| {
+                    for i in 0..8 {
+                        let a = i as f32 * PI / 4.0;
+                        let (s, c) = a.sin_cos();
+                        b.move_to(p(12.0 + c * 7.5, 12.0 + s * 7.5));
+                        b.line_to(p(12.0 + c * 10.5, 12.0 + s * 10.5));
+                    }
+                });
+                frame.stroke(&teeth, stroke);
+            }
+            Icon::Thread => {
+                let path = Path::new(|b| {
+                    b.move_to(p(5.0, 3.0));
+                    b.line_to(p(5.0, 14.0));
+                    b.arc_to(p(5.0, 18.0), p(9.0, 18.0), 4.0 * scale);
+                    b.line_to(p(20.0, 18.0));
+                    b.move_to(p(16.0, 14.0));
+                    b.line_to(p(20.0, 18.0));
+                    b.line_to(p(16.0, 22.0));
+                    b.move_to(p(10.0, 8.0));
+                    b.line_to(p(20.0, 8.0));
+                    b.move_to(p(10.0, 12.0));
+                    b.line_to(p(16.0, 12.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::UserPlus => {
+                frame.stroke(&Path::circle(p(9.0, 7.0), 4.0 * scale), stroke);
+                let path = Path::new(|b| {
+                    b.move_to(p(16.0, 21.0));
+                    b.arc_to(p(16.0, 15.0), p(2.0, 15.0), 4.0 * scale);
+                    b.arc_to(p(2.0, 15.0), p(2.0, 21.0), 4.0 * scale);
+                    b.line_to(p(2.0, 21.0));
+                    b.move_to(p(19.0, 8.0));
+                    b.line_to(p(19.0, 14.0));
+                    b.move_to(p(16.0, 11.0));
+                    b.line_to(p(22.0, 11.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::Archive => {
+                let path = Path::new(|b| {
+                    b.move_to(p(2.0, 3.0));
+                    b.line_to(p(22.0, 3.0));
+                    b.line_to(p(22.0, 8.0));
+                    b.line_to(p(2.0, 8.0));
+                    b.close();
+                    b.move_to(p(4.0, 8.0));
+                    b.line_to(p(4.0, 21.0));
+                    b.line_to(p(20.0, 21.0));
+                    b.line_to(p(20.0, 8.0));
+                    b.move_to(p(10.0, 12.0));
+                    b.line_to(p(14.0, 12.0));
+                });
+                frame.stroke(&path, stroke);
             }
         }
         vec![frame.into_geometry()]

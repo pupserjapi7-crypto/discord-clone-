@@ -252,13 +252,69 @@ struct Audio {
     mic: Option<Receiver<Vec<f32>>>,
 }
 
+/// Gewählte Geräte (Name); `None` = Systemstandard. Gilt ab dem nächsten Beitritt.
+static DEVICES: Mutex<(Option<String>, Option<String>)> = Mutex::new((None, None));
+
+pub fn set_devices(input: Option<String>, output: Option<String>) {
+    if let Ok(mut devices) = DEVICES.lock() {
+        *devices = (input, output);
+    }
+}
+
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device.description().ok().map(|d| d.name().to_owned())
+}
+
+/// Namen aller Ein- und Ausgabegeräte für die Einstellungen.
+pub fn list_devices() -> (Vec<String>, Vec<String>) {
+    let host = cpal::default_host();
+    let names = |devices: Option<Vec<cpal::Device>>| -> Vec<String> {
+        let mut list: Vec<String> = devices
+            .unwrap_or_default()
+            .iter()
+            .filter_map(device_name)
+            .collect();
+        list.dedup();
+        list
+    };
+    (
+        names(host.input_devices().ok().map(Iterator::collect)),
+        names(host.output_devices().ok().map(Iterator::collect)),
+    )
+}
+
+fn pick(
+    devices: Option<Vec<cpal::Device>>,
+    wanted: Option<&str>,
+    fallback: Option<cpal::Device>,
+) -> Option<cpal::Device> {
+    wanted
+        .and_then(|name| {
+            devices?
+                .into_iter()
+                .find(|d| device_name(d).as_deref() == Some(name))
+        })
+        .or(fallback)
+}
+
 fn start_audio(mixer: Arc<Mutex<Mixer>>, deafened: Arc<AtomicBool>) -> (Audio, Option<String>) {
     let host = cpal::default_host();
     let mut warning = None;
+    let (want_in, want_out) = DEVICES.lock().map(|d| d.clone()).unwrap_or_default();
+    let input_device = pick(
+        host.input_devices().ok().map(Iterator::collect),
+        want_in.as_deref(),
+        host.default_input_device(),
+    );
+    let output_device = pick(
+        host.output_devices().ok().map(Iterator::collect),
+        want_out.as_deref(),
+        host.default_output_device(),
+    );
 
     // Mikrofon → mono 48 kHz → Kanal zum Netz-Thread.
     let (mic_tx, mic_rx) = mpsc::channel::<Vec<f32>>();
-    let input = host.default_input_device().and_then(|device| {
+    let input = input_device.and_then(|device| {
         let config = device.default_input_config().ok()?;
         let channels = usize::from(config.channels());
         let mut resampler = Resampler::new(config.sample_rate(), RATE);
@@ -287,7 +343,7 @@ fn start_audio(mixer: Arc<Mutex<Mixer>>, deafened: Arc<AtomicBool>) -> (Audio, O
     }
 
     // Wiedergabe: 48 kHz gemischt → Geräterate/Kanäle.
-    let output = host.default_output_device().and_then(|device| {
+    let output = output_device.and_then(|device| {
         let config = device.default_output_config().ok()?;
         let channels = usize::from(config.channels());
         let step = f64::from(RATE) / f64::from(config.sample_rate());

@@ -4,6 +4,17 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-15 — Nativer Client zeichnet jedes Bild vollständig
+
+**Entscheidung:** `App::style` liefert pro Bild einen minimal anderen
+Hintergrund; tiny-skia zeichnet dadurch immer das ganze Fenster.
+Aufklappmenüs (`pick_list`) in Dialogen sind durch Auswahllisten ersetzt.
+
+**Warum:** Die Teil-Neuzeichnung von iced/tiny-skia 0.14 ließ bei umgebauten
+Listen (neuer Kanal) und Overlays Reste stehen bzw. löschte die Dialogkarte.
+Gezeichnet wird nur bei Ereignissen; ein volles Bild kostet auf der CPU
+wenige Millisekunden. Entfernen, sobald iced das behebt.
+
 ## 2026-11-14 — Native Sprache mit str0m, cpal und `unsafe-libopus`
 
 **Entscheidung:** Der native Client spricht WebRTC selbst über str0m (dieselbe

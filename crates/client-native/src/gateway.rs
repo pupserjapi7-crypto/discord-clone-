@@ -22,6 +22,25 @@ pub enum Command {
         channel_id: i64,
         content: String,
     },
+    Edit {
+        nonce: u64,
+        message_id: i64,
+        content: String,
+    },
+    Delete {
+        nonce: u64,
+        message_id: i64,
+    },
+    React {
+        message_id: i64,
+        emoji: String,
+        add: bool,
+    },
+    Typing(i64),
+    ReadAck {
+        channel_id: i64,
+        message_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,6 +211,12 @@ fn run(params: Params) -> impl iced::futures::Stream<Item = GatewayEvent> {
                                 reply_to: None,
                                 attachment_ids: Vec::new(),
                             },
+                            Command::Edit { nonce, message_id, content } => ClientOp::MessageEdit { nonce, message_id, content },
+                            Command::Delete { nonce, message_id } => ClientOp::MessageDelete { nonce, message_id },
+                            Command::React { message_id, emoji, add: true } => ClientOp::ReactionAdd { message_id, emoji },
+                            Command::React { message_id, emoji, add: false } => ClientOp::ReactionRemove { message_id, emoji },
+                            Command::Typing(channel_id) => ClientOp::Typing { channel_id },
+                            Command::ReadAck { channel_id, message_id } => ClientOp::ReadAck { channel_id, message_id },
                         };
                         if online && send(&mut sink, protocol::OP_REQUEST, &op).await.is_err() {
                             break;

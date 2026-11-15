@@ -51,6 +51,46 @@ pub struct User {
     pub display_name: String,
 }
 
+fn opt_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Int(i64),
+        Str(String),
+    }
+    match Option::<Raw>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(Raw::Int(value)) => Ok(Some(value)),
+        Some(Raw::Str(value)) => value.parse().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
+fn ids<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<i64>, D::Error> {
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|value| match value {
+            serde_json::Value::Number(n) => n.as_i64(),
+            serde_json::Value::String(s) => s.parse().ok(),
+            _ => None,
+        })
+        .collect())
+}
+
+/// Rechte-Bits wie in `nova_common::permissions`.
+pub mod perm {
+    pub const ADMINISTRATOR: u64 = 1 << 0;
+    pub const MANAGE_ROLES: u64 = 1 << 2;
+    pub const MANAGE_CHANNELS: u64 = 1 << 3;
+    pub const KICK_MEMBERS: u64 = 1 << 4;
+    pub const BAN_MEMBERS: u64 = 1 << 5;
+    pub const TIMEOUT_MEMBERS: u64 = 1 << 6;
+    pub const MANAGE_MESSAGES: u64 = 1 << 9;
+    pub const CREATE_INVITE: u64 = 1 << 19;
+    pub const CREATE_THREADS: u64 = 1 << 23;
+    pub const MANAGE_THREADS: u64 = 1 << 24;
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Guild {
     #[serde(deserialize_with = "id")]
@@ -58,6 +98,7 @@ pub struct Guild {
     pub name: String,
 }
 
+/// `kind`: 0 Text, 1 Sprache, 2 Thread.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Channel {
     #[serde(deserialize_with = "id")]
@@ -66,13 +107,50 @@ pub struct Channel {
     pub kind: i16,
     #[serde(default)]
     pub topic: Option<String>,
+    #[serde(default, deserialize_with = "opt_id")]
+    pub parent_id: Option<i64>,
+    #[serde(default, deserialize_with = "opt_id")]
+    pub owner_id: Option<i64>,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub slowmode_secs: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Member {
+    #[serde(default, deserialize_with = "opt_id")]
+    pub user_id: Option<i64>,
+    #[serde(default)]
+    pub handle: String,
     pub display_name: String,
     #[serde(default)]
     pub status: i16,
+    #[serde(default, deserialize_with = "ids")]
+    pub role_ids: Vec<i64>,
+    #[serde(default)]
+    pub timeout_until: Option<String>,
+    #[serde(default)]
+    pub bot: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Role {
+    #[serde(deserialize_with = "id")]
+    pub id: i64,
+    pub name: String,
+    #[serde(default)]
+    pub is_everyone: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Unread {
+    #[serde(deserialize_with = "id")]
+    pub channel_id: i64,
+    #[serde(default, deserialize_with = "opt_id")]
+    pub last_message_id: Option<i64>,
+    #[serde(default, deserialize_with = "opt_id")]
+    pub last_read_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,6 +160,27 @@ pub struct GuildDetail {
     pub channels: Vec<Channel>,
     #[serde(default)]
     pub members: Vec<Member>,
+    #[serde(default)]
+    pub roles: Vec<Role>,
+    #[serde(default)]
+    pub permissions: u64,
+    #[serde(default)]
+    pub unread: Vec<Unread>,
+}
+
+impl GuildDetail {
+    pub fn can(&self, bit: u64) -> bool {
+        self.permissions & perm::ADMINISTRATOR != 0 || self.permissions & bit == bit
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Reaction {
+    pub emoji: String,
+    #[serde(default)]
+    pub count: i64,
+    #[serde(default)]
+    pub me: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,6 +191,17 @@ pub struct Message {
     pub content: String,
     #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
+    pub edited_at: Option<String>,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Invite {
+    pub code: String,
 }
 
 #[derive(Deserialize)]
@@ -275,6 +385,178 @@ impl Api {
             None,
         )
         .await
+    }
+
+    /// Aufruf ohne verwertbare Antwort (204 oder beliebiges JSON).
+    async fn call(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<(), String> {
+        let _: serde_json::Value = self.request(method, path, body).await?;
+        Ok(())
+    }
+
+    pub async fn older_messages(&self, channel: i64, before: i64) -> Result<Vec<Message>, String> {
+        self.request(
+            reqwest::Method::GET,
+            &format!("/api/v1/channels/{channel}/messages?limit=50&before={before}"),
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_profile(&self, display_name: &str) -> Result<User, String> {
+        self.request(
+            reqwest::Method::PATCH,
+            "/api/v1/users/@me",
+            Some(serde_json::json!({ "display_name": display_name })),
+        )
+        .await
+    }
+
+    pub async fn create_guild(&self, name: &str) -> Result<Guild, String> {
+        self.request(
+            reqwest::Method::POST,
+            "/api/v1/guilds",
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    pub async fn create_channel(
+        &self,
+        guild: i64,
+        name: &str,
+        kind: i16,
+    ) -> Result<Channel, String> {
+        self.request(
+            reqwest::Method::POST,
+            &format!("/api/v1/guilds/{guild}/channels"),
+            Some(serde_json::json!({ "name": name, "kind": kind })),
+        )
+        .await
+    }
+
+    pub async fn update_channel(
+        &self,
+        channel: i64,
+        patch: serde_json::Value,
+    ) -> Result<(), String> {
+        self.call(
+            reqwest::Method::PATCH,
+            &format!("/api/v1/channels/{channel}"),
+            Some(patch),
+        )
+        .await
+    }
+
+    pub async fn create_invite(&self, guild: i64) -> Result<Invite, String> {
+        self.request(
+            reqwest::Method::POST,
+            &format!("/api/v1/guilds/{guild}/invites"),
+            Some(serde_json::json!({})),
+        )
+        .await
+    }
+
+    pub async fn join_invite(&self, code: &str) -> Result<(), String> {
+        // Nur Buchstaben und Ziffern in den Pfad lassen.
+        let code: String = code
+            .trim()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        if code.is_empty() {
+            return Err("Einladungscode fehlt.".into());
+        }
+        self.call(
+            reqwest::Method::POST,
+            &format!("/api/v1/invites/{code}"),
+            Some(serde_json::json!({})),
+        )
+        .await
+    }
+
+    pub async fn pins(&self, channel: i64) -> Result<Vec<Message>, String> {
+        self.request(
+            reqwest::Method::GET,
+            &format!("/api/v1/channels/{channel}/pins"),
+            None,
+        )
+        .await
+    }
+
+    pub async fn set_pin(&self, channel: i64, message: i64, pinned: bool) -> Result<(), String> {
+        let path = format!("/api/v1/channels/{channel}/pins/{message}");
+        if pinned {
+            self.call(reqwest::Method::PUT, &path, Some(serde_json::json!({})))
+                .await
+        } else {
+            self.call(reqwest::Method::DELETE, &path, None).await
+        }
+    }
+
+    pub async fn create_thread(
+        &self,
+        channel: i64,
+        message: i64,
+        name: &str,
+    ) -> Result<Channel, String> {
+        self.request(
+            reqwest::Method::POST,
+            &format!("/api/v1/channels/{channel}/messages/{message}/threads"),
+            Some(serde_json::json!({ "name": name })),
+        )
+        .await
+    }
+
+    pub async fn kick(&self, guild: i64, user: i64) -> Result<(), String> {
+        self.call(
+            reqwest::Method::POST,
+            &format!("/api/v1/guilds/{guild}/members/{user}/kick"),
+            Some(serde_json::json!({ "reason": "" })),
+        )
+        .await
+    }
+
+    pub async fn ban(&self, guild: i64, user: i64) -> Result<(), String> {
+        self.call(
+            reqwest::Method::PUT,
+            &format!("/api/v1/guilds/{guild}/bans/{user}"),
+            Some(serde_json::json!({ "reason": "" })),
+        )
+        .await
+    }
+
+    /// `seconds = 0` hebt einen Timeout auf.
+    pub async fn timeout(&self, guild: i64, user: i64, seconds: i64) -> Result<(), String> {
+        self.call(
+            reqwest::Method::PUT,
+            &format!("/api/v1/guilds/{guild}/members/{user}/timeout"),
+            Some(serde_json::json!({ "seconds": seconds })),
+        )
+        .await
+    }
+
+    pub async fn set_member_role(
+        &self,
+        guild: i64,
+        user: i64,
+        role: i64,
+        on: bool,
+    ) -> Result<(), String> {
+        let path = format!("/api/v1/guilds/{guild}/members/{user}/roles/{role}");
+        if on {
+            self.call(reqwest::Method::PUT, &path, Some(serde_json::json!({})))
+                .await
+        } else {
+            self.call(reqwest::Method::DELETE, &path, None).await
+        }
     }
 
     /// SDP-Offer (JSON von str0m) senden, Answer (JSON) zurück.

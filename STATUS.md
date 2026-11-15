@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 14.11.2026 · **Version:** 0.4.0 (Master-Prompt v0.2.2 → v1.0, Teil 1)
+**Stand:** 15.11.2026 · **Version:** 0.4.1 (nativer Client vollständig)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
@@ -68,6 +68,26 @@ Server-Release-Build waren vor den Änderungen **grün**.
   Stummschalten konnte die Testautomation nicht klicken (Windows sperrte den
   Fensterfokus) – bitte manuell prüfen.
 - Nicht gemessen: Mouth-to-Ear-Latenz.
+
+### Nativer Client vollständig (0.4.1)
+- Server erstellen, mit Einladungscode beitreten, Einladung erzeugen und
+  kopieren, Text-/Sprachkanäle anlegen (mit `MANAGE_CHANNELS`).
+- Nachrichten: bearbeiten, löschen, Reaktionen (Schnellauswahl + Pillen),
+  anpinnen/lösen, Pins-Liste, ältere Nachrichten laden, „… schreibt“,
+  Ungelesen-Punkte inkl. Lesestand (`ReadAck`), Slowmode-Hinweis.
+- Threads: unter dem Elternkanal, aus Nachricht starten, archivieren.
+- Moderation in der Profilkarte: Rollen vergeben/entziehen, Timeout
+  (10 min/1 h/1 Tag/aufheben), Kicken und Bannen mit Bestätigung.
+- Einstellungen: Anzeigename, Mikrofon/Lautsprecher, Push-to-Talk mit frei
+  wählbarer Taste (gilt bei Fenster im Vordergrund), automatisches
+  Neuverbinden der Sprache (3 Versuche).
+- Live: `guild_update`, `guild_member_*`, `presence_update`, `message_pin`,
+  Reaktionen, Tippen.
+- **Getestet** (15.11.2026, lokaler Server, zwei Konten): Laden, Pins,
+  Threads, Ungelesen, Live-Kanäle und -Nachrichten, alle Dialoge per
+  Screenshot (Debug-Haken `NOVA_DEV_MODAL`, `NOVA_DEV_TOOLS`). Bearbeiten,
+  Reagieren und Moderationsknöpfe nicht per Klick geprüft (die Testautomation
+  liefert keine Mausbewegungen) – bitte kurz manuell prüfen.
 
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,

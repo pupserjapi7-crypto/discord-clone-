@@ -112,6 +112,120 @@ pub fn danger_button(_: &Theme, status: button::Status) -> button::Style {
     }
 }
 
+/// Abgedunkelte Fläche hinter Dialogen.
+pub fn backdrop(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color {
+            a: 0.62,
+            ..Color::BLACK
+        })),
+        ..container::Style::default()
+    }
+}
+
+/// Dialogkarte über dem Backdrop.
+pub fn modal(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: BORDER_STRONG,
+            width: 1.0,
+            radius: 14.0.into(),
+        },
+        shadow: Shadow {
+            color: Color {
+                a: 0.45,
+                ..Color::BLACK
+            },
+            offset: iced::Vector::new(0.0, 12.0),
+            blur_radius: 32.0,
+        },
+        ..fill(SIDEBAR)
+    }
+}
+
+/// Schwebende Aktionsleiste an einer Nachricht (beim Überfahren).
+pub fn message_tools(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: BORDER_STRONG,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..fill(RAISED)
+    }
+}
+
+/// Hervorhebung der überfahrenen Nachricht.
+pub fn message_hover(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color {
+            a: 0.025,
+            ..Color::WHITE
+        })),
+        ..container::Style::default()
+    }
+}
+
+/// Reaktions-Pille; eigene Reaktion in Akzentfarbe umrandet.
+pub fn reaction(_: &Theme, status: button::Status, me: bool) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: Some(Background::Color(if me {
+            ACTIVE
+        } else if hovered {
+            BORDER_STRONG
+        } else {
+            RAISED
+        })),
+        text_color: TEXT,
+        border: Border {
+            color: if me { ACCENT } else { BORDER },
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+/// Kleines Etikett (z. B. „BOT“) in voller Farbe.
+pub fn tag(color: Color) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: 4.0.into(),
+            ..Border::default()
+        },
+        background: Some(Background::Color(color)),
+        text_color: Some(ON_ACCENT),
+        ..container::Style::default()
+    }
+}
+
+/// Kleiner Ungelesen-Punkt bzw. Pille.
+pub fn unread_dot(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: 999.0.into(),
+            ..Border::default()
+        },
+        ..fill(TEXT)
+    }
+}
+
+/// Wichtiger Hinweis im Dialog (z. B. Bestätigung vor Bann).
+pub fn danger_note(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: DANGER,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        background: Some(Background::Color(Color { a: 0.10, ..DANGER })),
+        text_color: Some(TEXT),
+        ..container::Style::default()
+    }
+}
+
 pub fn app_bg(_: &Theme) -> container::Style {
     fill(MAIN)
 }
