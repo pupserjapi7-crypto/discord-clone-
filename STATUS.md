@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 15.11.2026 · **Version:** 0.4.1 (nativer Client vollständig)
+**Stand:** 15.11.2026 · **Version:** 0.4.2 (nativer Client vollständig, Linux-Build repariert)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
