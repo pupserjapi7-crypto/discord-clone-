@@ -102,6 +102,15 @@ fn ui(root: &Path, gallery: bool) -> Result<()> {
         dist.join("assets/app.css"),
     )
     .context("app.css kopieren")?;
+    // Nur die woff2-Datei; die TTFs daneben sind für den nativen Client.
+    fs::create_dir_all(dist.join("assets/fonts"))?;
+    for name in ["AtkinsonHyperlegibleNext-latin.woff2", "OFL.txt"] {
+        fs::copy(
+            root.join("crates/ui/assets/fonts").join(name),
+            dist.join("assets/fonts").join(name),
+        )
+        .with_context(|| format!("{name} kopieren"))?;
+    }
 
     // rust-embed merkt geänderte Dateien nicht immer: Server-Crate anstoßen.
     let main = root.join("crates/nova/src/main.rs");

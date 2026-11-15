@@ -40,6 +40,21 @@ pub fn VoiceStage(channel: Channel) -> Element {
         }
     }));
 
+    // Beitritts-Moment: nur direkt nach dem Beitreten erscheinen die Kacheln
+    // einmal nacheinander (CSS `.is-entering`), nicht beim bloßen Hinsehen.
+    let mut entering = use_signal(|| false);
+    let mut was_here = use_signal(|| here);
+    use_effect(use_reactive!(|here| {
+        if here && !*was_here.peek() {
+            entering.set(true);
+            spawn(async move {
+                gloo_timers::future::TimeoutFuture::new(400).await;
+                entering.set(false);
+            });
+        }
+        was_here.set(here);
+    }));
+
     if people.is_empty() && !here {
         let join_channel = channel.clone();
         return rsx! {
@@ -66,13 +81,14 @@ pub fn VoiceStage(channel: Channel) -> Element {
         };
     }
 
-    let tile = |person: &VoiceParticipant, feature: bool| {
+    let tile = |index: usize, person: &VoiceParticipant, feature: bool| {
         let speaking = voice_state.speaking.contains(&person.user_id);
         let has_video = feature;
         rsx! {
             div {
                 key: "{person.user_id}-{feature}",
                 class: classes(&["nv-tile", if feature { "nv-tile--feature" } else { "" }, if speaking { "is-speaking" } else { "" }]),
+                style: "--i: {index}",
                 if has_video {
                     span { class: "nv-tile__wait",
                         Icon { name: "screen", size: 28 }
@@ -103,22 +119,22 @@ pub fn VoiceStage(channel: Channel) -> Element {
 
     let join_channel = channel.clone();
     rsx! {
-        div { class: "nv-stage", "aria-label": "Sprachkanal {channel.name}",
+        div { class: if entering() { "nv-stage is-entering" } else { "nv-stage" }, "aria-label": "Sprachkanal {channel.name}",
             if !streamers.is_empty() {
                 div { class: "nv-stage__feature",
-                    for person in streamers.iter() {
-                        {tile(person, true)}
+                    for (index, person) in streamers.iter().enumerate() {
+                        {tile(index, person, true)}
                     }
                 }
                 div { class: "nv-stage__strip",
-                    for person in people.iter() {
-                        {tile(person, false)}
+                    for (index, person) in people.iter().enumerate() {
+                        {tile(index, person, false)}
                     }
                 }
             } else {
                 div { class: "nv-stage__grid",
-                    for person in people.iter() {
-                        {tile(person, false)}
+                    for (index, person) in people.iter().enumerate() {
+                        {tile(index, person, false)}
                     }
                 }
             }

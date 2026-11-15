@@ -325,7 +325,7 @@ fn MessageRow(
                     div { class: "nv-msg__head",
                         span { class: "nv-msg__author", "{message.author.display_name}" }
                         if message.author.bot {
-                            span { class: "nv-badge nv-badge--accent", "BOT" }
+                            span { class: "nv-badge", "Bot" }
                         }
                         time { class: "nv-msg__time", title: "{day}, {time} Uhr", datetime: "{message.created_at}", "{time}" }
                     }

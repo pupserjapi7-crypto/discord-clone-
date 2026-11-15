@@ -411,7 +411,7 @@ fn Components() -> Element {
                             Avatar { name: "Patchnotes", bot: true }
                             StatusDot { status: 0 }
                             span { class: "nv-badge", "Badge" }
-                            span { class: "nv-badge nv-badge--accent", "LIVE" }
+                            span { class: "nv-badge nv-badge--accent", "Live" }
                             span { class: "nv-count", "3" }
                             Kbd { "Strg K" }
                         }

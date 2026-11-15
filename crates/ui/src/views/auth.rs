@@ -1,6 +1,10 @@
 use dioxus::prelude::*;
 
-use crate::{actions, api, components::Icon, store::use_store};
+use crate::{
+    actions, api,
+    components::{Avatar, Icon},
+    store::use_store,
+};
 
 #[component]
 pub fn AuthScreen() -> Element {
@@ -33,7 +37,8 @@ pub fn AuthScreen() -> Element {
                 Ok(user) => actions::finish_login(store, user).await,
                 Err(err) => {
                     let text = if !registering && err.contains("abgelaufen") {
-                        "Benutzername oder Passwort stimmt nicht.".to_string()
+                        "Benutzername oder Passwort stimmt nicht. Prüfe beides und versuch es noch mal."
+                            .to_string()
                     } else {
                         err
                     };
@@ -56,9 +61,10 @@ pub fn AuthScreen() -> Element {
     };
     rsx! {
         main { class: "nv-auth",
+            section { class: "nv-auth__form",
             div { class: "nv-auth__card",
                 div { class: "nv-auth__brand",
-                    span { class: "nv-auth__logo", Icon { name: "logo", size: 24 } }
+                    span { class: "nv-auth__logo", Icon { name: "logo", size: 28 } }
                     h1 { "{title}" }
                     p {
                         if register() {
@@ -123,6 +129,37 @@ pub fn AuthScreen() -> Element {
                             error.set(None);
                         },
                         if register() { "Anmelden" } else { "Konto erstellen" }
+                    }
+                }
+            }
+            }
+            LoungePreview {}
+        }
+    }
+}
+
+/// Statischer Ausschnitt einer Voice-Lounge: zeigt, worum es bei Nova geht.
+#[component]
+fn LoungePreview() -> Element {
+    let people = [
+        ("Mara Lenz", true, false),
+        ("Jonas", false, false),
+        ("Ida Krüger", false, false),
+        ("Tom", false, true),
+    ];
+    rsx! {
+        aside { class: "nv-auth__preview", "aria-hidden": "true",
+            div { class: "nv-auth__lounge",
+                div { class: "nv-auth__lounge-head", Icon { name: "volume", size: 18 } "Lounge" }
+                div { class: "nv-stage__grid",
+                    for (name, speaking, muted) in people {
+                        div { key: "{name}", class: if speaking { "nv-tile is-speaking" } else { "nv-tile" },
+                            Avatar { name: name.to_string(), size: 72, speaking }
+                            span { class: "nv-tile__name", "{name}" }
+                            if muted {
+                                div { class: "nv-tile__icons", span { Icon { name: "mic-off", size: 14 } } }
+                            }
+                        }
                     }
                 }
             }

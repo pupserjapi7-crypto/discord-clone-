@@ -414,7 +414,7 @@ fn MemberCard(user_id: String) -> Element {
                         div { class: "nv-profile__name", "{member.display_name}" }
                         div { class: "nv-profile__handle", "@{member.handle}" }
                         if is_owner {
-                            span { class: "nv-badge nv-badge--accent", "Owner" }
+                            span { class: "nv-badge", "Owner" }
                         }
                         if member.timeout_until.is_some() {
                             span { class: "nv-badge nv-badge--danger", "Timeout" }

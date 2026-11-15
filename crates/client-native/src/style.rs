@@ -1,53 +1,79 @@
-//! Farben und Stile — dieselben Tokens wie `crates/ui/assets/app.css`.
+//! Farben und Stile „Funkraum“ — exakt die Dark-Tokens aus
+//! `crates/ui/assets/app.css` (Test `tokens_match_web_css` hält beide gleich).
+//! Nova-Gelb heißt nur: live, aktiv, jetzt.
 
 use iced::widget::{button, container, text_input};
 use iced::{Background, Border, Color, Font, Shadow, Theme, color, font};
 
-/// Für Namen und Überschriften: trägt Hierarchie ohne größere Schrift.
-pub const SEMIBOLD: Font = Font {
-    weight: font::Weight::Semibold,
-    ..Font::DEFAULT
+/// Atkinson Hyperlegible Next, dieselbe Schrift wie im Web (TTF, weil iced
+/// kein woff2 liest). Eingebunden in `main.rs`.
+pub const FONT: Font = Font::with_name("Atkinson Hyperlegible Next");
+/// Für Namen und Überschriften; nur 400 und 700 (600 wirkt zu weich).
+pub const BOLD: Font = Font {
+    weight: font::Weight::Bold,
+    ..FONT
 };
 
-pub const RAIL: Color = color!(0x0f1115);
-pub const SIDEBAR: Color = color!(0x13161c);
-pub const MAIN: Color = color!(0x171b22);
-pub const RAISED: Color = color!(0x1d222b);
+/// `--nv-bg-0`: Server-Leiste
+pub const RAIL: Color = color!(0x10151e);
+/// `--nv-bg-1`: Kanäle, Mitglieder
+pub const SIDEBAR: Color = color!(0x151b26);
+/// `--nv-bg-2`: Chat
+pub const MAIN: Color = color!(0x1a2130);
+/// `--nv-bg-3`: Eingaben, Kacheln, Hover
+pub const RAISED: Color = color!(0x212938);
+/// `--nv-bg-4`: aktiv, Popover
+pub const RAISED_HI: Color = color!(0x2a3446);
 
-pub const TEXT: Color = color!(0xe8ebf1);
-pub const MUTED: Color = color!(0xa0a8b7);
-pub const FAINT: Color = color!(0x7d8797);
-pub const ON_ACCENT: Color = color!(0x10121a);
+/// `--nv-text-1`
+pub const TEXT: Color = color!(0xe8ecf3);
+/// `--nv-text-2`
+pub const MUTED: Color = color!(0xa9b2c3);
+/// `--nv-text-3`
+pub const FAINT: Color = color!(0x8692a7);
+/// `--nv-text-on-accent`: Text auf Gelb, nie Weiß
+pub const ON_ACCENT: Color = color!(0x1b1405);
 
-pub const ACCENT: Color = color!(0x7b86f8);
-pub const ACCENT_HOVER: Color = color!(0x929bff);
-pub const ONLINE: Color = color!(0x49b98a);
-pub const WARN: Color = color!(0xd0a44c);
-pub const DANGER: Color = color!(0xdf737d);
+/// `--nv-accent`
+pub const ACCENT: Color = color!(0xffc34d);
+/// `--nv-accent-hover`
+pub const ACCENT_HOVER: Color = color!(0xffd27a);
+/// `--nv-speaking`: Sprecher-Ring
+pub const SPEAKING: Color = color!(0xffc34d);
+/// `--nv-online`
+pub const ONLINE: Color = color!(0x4fd18b);
+/// `--nv-danger`
+pub const DANGER: Color = color!(0xff6b6b);
+/// `--nv-offline`
+pub const OFFLINE: Color = color!(0x5d6779);
 
+/// Hover-Schleier: macht aus `--nv-bg-1` ungefähr `--nv-bg-3`.
 const HOVER: Color = Color {
-    r: 1.0,
-    g: 1.0,
-    b: 1.0,
-    a: 0.045,
-};
-const ACTIVE: Color = Color {
-    r: 0.482,
-    g: 0.525,
-    b: 0.973,
-    a: 0.16,
-};
-const BORDER: Color = Color {
-    r: 1.0,
-    g: 1.0,
-    b: 1.0,
+    r: 0.784,
+    g: 0.843,
+    b: 0.941,
     a: 0.07,
 };
-const BORDER_STRONG: Color = Color {
+/// `--nv-accent-soft`: ausgewählte Zeile
+const ACTIVE: Color = Color {
     r: 1.0,
-    g: 1.0,
-    b: 1.0,
+    g: 0.765,
+    b: 0.302,
     a: 0.13,
+};
+/// `--nv-line`
+const BORDER: Color = Color {
+    r: 0.784,
+    g: 0.843,
+    b: 0.941,
+    a: 0.08,
+};
+/// `--nv-line-strong`
+const BORDER_STRONG: Color = Color {
+    r: 0.784,
+    g: 0.843,
+    b: 0.941,
+    a: 0.14,
 };
 
 pub fn theme() -> Theme {
@@ -58,7 +84,7 @@ pub fn theme() -> Theme {
             text: TEXT,
             primary: ACCENT,
             success: ONLINE,
-            warning: WARN,
+            warning: DANGER,
             danger: DANGER,
         },
     )
@@ -72,15 +98,28 @@ fn fill(color: Color) -> container::Style {
     }
 }
 
-/// Voice-Kachel; sprechende Personen bekommen einen 2-px-Ring in Grün.
+/// Voice-Kachel; wer spricht, bekommt den 2-px-Ring in Nova-Gelb.
 pub fn voice_tile(speaking: bool) -> container::Style {
     container::Style {
         border: Border {
-            color: if speaking { ONLINE } else { BORDER },
+            color: if speaking { SPEAKING } else { BORDER },
             width: if speaking { 2.0 } else { 1.0 },
-            radius: 14.0.into(),
+            radius: 12.0.into(),
         },
         ..fill(RAISED)
+    }
+}
+
+/// Namensbalken in der Kachel: füllt sich gelb, solange die Person spricht —
+/// die einzige größere gelbe Fläche der App.
+pub fn name_bar(speaking: bool) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: 4.0.into(),
+            ..Border::default()
+        },
+        background: speaking.then_some(Background::Color(ACCENT)),
+        ..container::Style::default()
     }
 }
 
@@ -144,7 +183,7 @@ pub fn modal(_: &Theme) -> container::Style {
         border: Border {
             color: BORDER_STRONG,
             width: 1.0,
-            radius: 14.0.into(),
+            radius: 12.0.into(),
         },
         // Kein Schatten: siehe `NO_SHADOW`.
         shadow: NO_SHADOW,
@@ -175,17 +214,11 @@ pub fn message_hover(_: &Theme) -> container::Style {
     }
 }
 
-/// Reaktions-Pille; eigene Reaktion in Akzentfarbe umrandet.
+/// Reaktions-Pille; eigene Reaktion mit 1-px-Rand in Akzentfarbe.
 pub fn reaction(_: &Theme, status: button::Status, me: bool) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {
-        background: Some(Background::Color(if me {
-            ACTIVE
-        } else if hovered {
-            BORDER_STRONG
-        } else {
-            RAISED
-        })),
+        background: Some(Background::Color(if hovered { RAISED_HI } else { RAISED })),
         text_color: TEXT,
         border: Border {
             color: if me { ACCENT } else { BORDER },
@@ -197,7 +230,7 @@ pub fn reaction(_: &Theme, status: button::Status, me: bool) -> button::Style {
     }
 }
 
-/// Kleines Etikett (z. B. „BOT“) in voller Farbe.
+/// Kleines Etikett: „Live“ in Gelb, „Bot“ neutral in `RAISED_HI`.
 pub fn tag(color: Color) -> container::Style {
     container::Style {
         border: Border {
@@ -276,7 +309,7 @@ pub fn card(_: &Theme) -> container::Style {
         border: Border {
             color: BORDER_STRONG,
             width: 1.0,
-            radius: 16.0.into(),
+            radius: 12.0.into(),
         },
         ..fill(SIDEBAR)
     }
@@ -304,24 +337,48 @@ pub fn banner(tone: Color) -> container::Style {
     }
 }
 
-/// Gedämpfte Avatar-Töne: unterscheidbar, aber keiner lauter als der Akzent.
-const AVATAR_TINTS: [Color; 8] = [
-    color!(0x4c5499),
-    color!(0x2f6f5a),
-    color!(0x80562f),
-    color!(0x7a3f62),
-    color!(0x2f6587),
-    color!(0x67478c),
-    color!(0x3d6d72),
-    color!(0x84484c),
+/// `--nv-tone-0…5`: gedämpftes Blau, Grau, Grün, Rost, Petrol, Pflaume — nie gelb.
+const AVATAR_TINTS: [Color; 6] = [
+    color!(0x2b3a55),
+    color!(0x343b48),
+    color!(0x27403a),
+    color!(0x4a3129),
+    color!(0x1f4048),
+    color!(0x3e2e48),
 ];
 
-/// Fester Ton je Name, damit dieselbe Person überall gleich aussieht.
+/// Fester Ton je Name, gleiche Rechnung wie `tone()` in `crates/ui`, damit
+/// dieselbe Person in beiden Clients gleich aussieht.
 pub fn avatar_tint(name: &str) -> Color {
-    let hash = name.bytes().fold(2_166_136_261_u32, |h, b| {
-        (h ^ u32::from(b)).wrapping_mul(16_777_619)
-    });
-    AVATAR_TINTS[hash as usize % AVATAR_TINTS.len()]
+    let tone = name.bytes().fold(7u32, |acc, byte| {
+        acc.wrapping_mul(31).wrapping_add(u32::from(byte))
+    }) % 6;
+    AVATAR_TINTS[tone as usize]
+}
+
+/// Avatar mit 2-px-Ring: Sprecher-Gelb oder Flächenfarbe (trennt überlappende).
+pub fn avatar_ring(tint: Color, ring: Color) -> container::Style {
+    container::Style {
+        border: Border {
+            color: ring,
+            width: 2.0,
+            radius: 999.0.into(),
+        },
+        ..fill(tint)
+    }
+}
+
+/// Status über Form statt nur Farbe: online gefüllt, offline hohler Ring.
+pub fn presence(online: bool) -> container::Style {
+    container::Style {
+        border: Border {
+            color: OFFLINE,
+            width: if online { 0.0 } else { 2.0 },
+            radius: 999.0.into(),
+        },
+        background: online.then_some(Background::Color(ONLINE)),
+        ..container::Style::default()
+    }
 }
 
 pub fn avatar(tint: Color) -> container::Style {
@@ -350,25 +407,14 @@ pub fn divider(_: &Theme) -> container::Style {
     fill(BORDER)
 }
 
-/// Runde Fläche hinter Icons in Leerzuständen.
+/// Fläche hinter Icons in Leerzuständen und im Kanal-Willkommen.
 pub fn badge(_: &Theme) -> container::Style {
     container::Style {
         border: Border {
-            radius: 999.0.into(),
+            radius: 12.0.into(),
             ..Border::default()
         },
-        ..fill(ACTIVE)
-    }
-}
-
-/// Markenfläche auf dem Login-Bildschirm.
-pub fn brand_soft(_: &Theme) -> container::Style {
-    container::Style {
-        border: Border {
-            radius: 16.0.into(),
-            ..Border::default()
-        },
-        ..fill(ACTIVE)
+        ..fill(RAISED)
     }
 }
 
@@ -390,7 +436,7 @@ pub fn composer(_: &Theme) -> container::Style {
         border: Border {
             color: BORDER_STRONG,
             width: 1.0,
-            radius: 10.0.into(),
+            radius: 8.0.into(),
         },
         ..fill(RAISED)
     }
@@ -415,7 +461,7 @@ pub fn input(_: &Theme, status: text_input::Status) -> text_input::Style {
         border: Border {
             color: if focused { ACCENT } else { BORDER_STRONG },
             width: 1.0,
-            radius: 10.0.into(),
+            radius: 8.0.into(),
         },
         icon: MUTED,
         placeholder: FAINT,
@@ -440,17 +486,17 @@ fn base_button(background: Option<Color>, text_color: Color, radius: f32) -> but
 pub fn primary(_: &Theme, status: button::Status) -> button::Style {
     match status {
         button::Status::Hovered | button::Status::Pressed => {
-            base_button(Some(ACCENT_HOVER), ON_ACCENT, 10.0)
+            base_button(Some(ACCENT_HOVER), ON_ACCENT, 8.0)
         }
-        button::Status::Disabled => base_button(Some(RAISED), FAINT, 10.0),
-        button::Status::Active => base_button(Some(ACCENT), ON_ACCENT, 10.0),
+        button::Status::Disabled => base_button(Some(RAISED), FAINT, 8.0),
+        button::Status::Active => base_button(Some(ACCENT), ON_ACCENT, 8.0),
     }
 }
 
 pub fn ghost(_: &Theme, status: button::Status) -> button::Style {
     match status {
-        button::Status::Hovered | button::Status::Pressed => base_button(Some(HOVER), TEXT, 6.0),
-        _ => base_button(None, MUTED, 6.0),
+        button::Status::Hovered | button::Status::Pressed => base_button(Some(HOVER), TEXT, 8.0),
+        _ => base_button(None, MUTED, 8.0),
     }
 }
 
@@ -460,7 +506,7 @@ pub fn link(_: &Theme, status: button::Status) -> button::Style {
     } else {
         ACCENT
     };
-    base_button(None, color, 6.0)
+    base_button(None, color, 8.0)
 }
 
 /// Quadratischer Icon-Knopf; `on` markiert einen eingeschalteten Schalter.
@@ -470,7 +516,7 @@ pub fn icon_button(_: &Theme, status: button::Status, on: bool) -> button::Style
         button::Status::Hovered | button::Status::Pressed => Some(HOVER),
         _ => None,
     };
-    base_button(background, MUTED, 6.0)
+    base_button(background, MUTED, 8.0)
 }
 
 /// Icon-Knopf für Gefährliches (Abmelden): färbt sich beim Hover rot ein.
@@ -479,7 +525,7 @@ pub fn danger_icon_button(_: &Theme, status: button::Status) -> button::Style {
         button::Status::Hovered | button::Status::Pressed => Some(Color { a: 0.14, ..DANGER }),
         _ => None,
     };
-    base_button(background, MUTED, 6.0)
+    base_button(background, MUTED, 8.0)
 }
 
 /// Senden-Knopf im Composer: Akzentfläche nur, wenn es etwas zu senden gibt.
@@ -501,28 +547,36 @@ pub fn channel_button(_: &Theme, status: button::Status, active: bool) -> button
     } else {
         None
     };
-    base_button(background, TEXT, 6.0)
+    base_button(background, TEXT, 8.0)
 }
 
-/// Server in der linken Leiste: rund im Ruhezustand, abgerundetes Quadrat bei
-/// Hover, aktiv mit Akzentring statt voller Akzentfläche — so bleibt der Akzent
-/// für Aktionen reserviert und das Logo darüber verwechselt man nicht.
+/// Server in der linken Leiste: immer abgerundetes Quadrat (44 px, Radius 12),
+/// kein Kreis-zu-Quadrat. Ausgewählt: `RAISED_HI` plus 2-px-Ring in Gelb.
 pub fn rail_button(_: &Theme, status: button::Status, active: bool) -> button::Style {
     let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-    let (background, radius, border) = if active {
-        (ACTIVE, 14.0, ACCENT)
-    } else if hovered {
-        (color!(0x2a303b), 14.0, Color::TRANSPARENT)
-    } else {
-        (RAISED, 24.0, Color::TRANSPARENT)
-    };
+    let background = if active || hovered { RAISED_HI } else { RAISED };
     button::Style {
         border: Border {
-            color: border,
+            color: if active { ACCENT } else { Color::TRANSPARENT },
             width: if active { 2.0 } else { 0.0 },
-            radius: radius.into(),
+            radius: 12.0.into(),
         },
-        ..base_button(Some(background), TEXT, radius)
+        ..base_button(
+            Some(background),
+            if active || hovered { TEXT } else { MUTED },
+            12.0,
+        )
+    }
+}
+
+/// 2-px-Streifen links am ausgewählten Kanal.
+pub fn accent_stripe(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: 2.0.into(),
+            ..Border::default()
+        },
+        ..fill(ACCENT)
     }
 }
 
@@ -553,9 +607,9 @@ mod tests {
             ("toast", toast),
             ("divider", divider),
             ("badge", badge),
-            ("brand_soft", brand_soft),
             ("tooltip", tooltip),
             ("composer", composer),
+            ("accent_stripe", accent_stripe),
         ];
         for (name, style) in containers {
             assert_eq!(
@@ -586,6 +640,86 @@ mod tests {
             for style in buttons {
                 assert_eq!(style.shadow.color.a, 0.0, "Knopf mit Schatten");
             }
+        }
+    }
+
+    /// Liest einen Farbwert (`#rrggbb` oder `rgba(r, g, b, a)`) als `Color`.
+    fn parse_css_color(value: &str) -> Color {
+        if let Some(hex) = value.strip_prefix('#') {
+            let rgb = u32::from_str_radix(hex, 16).expect("Hex-Farbe");
+            return Color::from_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+        }
+        let inner = value
+            .strip_prefix("rgba(")
+            .and_then(|v| v.strip_suffix(')'))
+            .expect("rgba(…)");
+        let parts: Vec<f32> = inner
+            .split(',')
+            .map(|p| p.trim().parse().expect("Zahl"))
+            .collect();
+        Color::from_rgba8(parts[0] as u8, parts[1] as u8, parts[2] as u8, parts[3])
+    }
+
+    /// Die Konstanten müssen den Dark-Tokens in `app.css` entsprechen, sonst
+    /// laufen Web und nativer Client wieder auseinander.
+    #[test]
+    fn tokens_match_web_css() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../ui/assets/app.css");
+        let css = std::fs::read_to_string(path).expect("app.css lesbar");
+        // Nur der erste `:root`-Block (Dark); Light folgt später in der Datei.
+        let root = css
+            .split(":root {")
+            .nth(1)
+            .and_then(|rest| rest.split('}').next())
+            .expect(":root-Block");
+        let token = |name: &str| -> Color {
+            let line = root
+                .lines()
+                .map(str::trim)
+                .find(|l| l.starts_with(&format!("{name}:")))
+                .unwrap_or_else(|| panic!("{name} fehlt in app.css"));
+            let value = line[name.len() + 1..].trim().trim_end_matches(';').trim();
+            parse_css_color(value)
+        };
+        let mut pairs = vec![
+            ("--nv-bg-0", RAIL),
+            ("--nv-bg-1", SIDEBAR),
+            ("--nv-bg-2", MAIN),
+            ("--nv-bg-3", RAISED),
+            ("--nv-bg-4", RAISED_HI),
+            ("--nv-line", BORDER),
+            ("--nv-line-strong", BORDER_STRONG),
+            ("--nv-text-1", TEXT),
+            ("--nv-text-2", MUTED),
+            ("--nv-text-3", FAINT),
+            ("--nv-text-on-accent", ON_ACCENT),
+            ("--nv-accent", ACCENT),
+            ("--nv-accent-hover", ACCENT_HOVER),
+            ("--nv-accent-soft", ACTIVE),
+            ("--nv-speaking", SPEAKING),
+            ("--nv-online", ONLINE),
+            ("--nv-danger", DANGER),
+            ("--nv-offline", OFFLINE),
+        ];
+        let tones = [
+            "--nv-tone-0",
+            "--nv-tone-1",
+            "--nv-tone-2",
+            "--nv-tone-3",
+            "--nv-tone-4",
+            "--nv-tone-5",
+        ];
+        pairs.extend(tones.into_iter().zip(AVATAR_TINTS));
+        for (name, native) in pairs {
+            let web = token(name);
+            let close = |a: f32, b: f32, eps: f32| (a - b).abs() <= eps;
+            assert!(
+                close(web.r, native.r, 1.0 / 255.0)
+                    && close(web.g, native.g, 1.0 / 255.0)
+                    && close(web.b, native.b, 1.0 / 255.0)
+                    && close(web.a, native.a, 0.005),
+                "{name}: app.css {web:?} ≠ nativ {native:?}"
+            );
         }
     }
 }

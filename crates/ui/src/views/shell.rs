@@ -148,7 +148,6 @@ fn ServerRail() -> Element {
                     let id = guild.id.clone();
                     rsx! {
                         div { key: "{guild.id}", class: classes(&["nv-rail__item", if active { "is-active" } else { "" }]),
-                            span { class: "nv-rail__pill" }
                             button {
                                 class: "nv-rail__btn",
                                 title: "{guild.name}",
@@ -165,7 +164,6 @@ fn ServerRail() -> Element {
                 }
             }
             div { class: "nv-rail__item",
-                span { class: "nv-rail__pill" }
                 button {
                     class: "nv-rail__btn nv-rail__btn--add",
                     title: "Server erstellen oder beitreten",
@@ -356,18 +354,31 @@ fn ChannelSidebar() -> Element {
                                         }
                                     }
                                     if !people.is_empty() {
+                                        // Auf einen Blick: wer da ist und wer gerade redet.
+                                        div { class: "nv-voice-row", "aria-hidden": "true",
+                                            for person in people.iter().take(6) {
+                                                Avatar { key: "{person.user_id}", name: person.display_name.clone(), size: 20, speaking: speaking.contains(&person.user_id) }
+                                            }
+                                            if people.len() > 6 {
+                                                span { class: "nv-voice-row__more", "+{people.len() - 6}" }
+                                            }
+                                        }
                                         div { class: "nv-voice-people",
                                             for person in people {
-                                                div { key: "{person.user_id}", class: "nv-voice-person",
-                                                    Avatar { name: person.display_name.clone(), size: 20, speaking: speaking.contains(&person.user_id) }
+                                                div {
+                                                    key: "{person.user_id}",
+                                                    class: classes(&["nv-voice-person", if speaking.contains(&person.user_id) { "is-speaking" } else { "" }]),
                                                     span { "{person.display_name}" }
+                                                    if speaking.contains(&person.user_id) {
+                                                        span { class: "sr-only", "spricht" }
+                                                    }
                                                     if person.deafened {
                                                         Icon { name: "headphones-off", size: 14 }
                                                     } else if person.muted {
                                                         Icon { name: "mic-off", size: 14 }
                                                     }
                                                     if person.screen {
-                                                        span { class: "nv-badge nv-badge--accent", "LIVE" }
+                                                        span { class: "nv-badge nv-badge--accent", "Live" }
                                                     }
                                                 }
                                             }

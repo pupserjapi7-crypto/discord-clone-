@@ -233,3 +233,16 @@ hinter der `BlobStore`-Abstraktion; Metadaten in PostgreSQL.
 
 **Warum:** Deduplizierung, einfache Backups, kein S3-Zwang. Die Abstraktion
 erlaubt später einen Object-Store, ohne API oder Datenbank zu ändern.
+
+## 2026-11-15 — Schrift: Atkinson Hyperlegible Next eingebettet (ersetzt „Inter nur, wenn installiert“)
+
+**Entscheidung:** Web und nativer Client nutzen Atkinson Hyperlegible Next
+(SIL OFL). Web: eine variable woff2 (lateinische Teilmenge, 400–700, 34 KB)
+unter `crates/ui/assets/fonts/`, per `@font-face` mit `font-display: swap`,
+über `rust-embed` ausgeliefert. Nativ: dieselbe Schrift als statische TTF
+(Regular/Bold, je 46 KB) per `include_bytes!`. Code bleibt `ui-monospace`.
+
+**Warum:** Teil des Designs „Funkraum“: eindeutige Formen (l/I/1, 0/O) für
+Benutzernamen, eigenständiger Charakter. Die frühere Sorge (300+ KB, externe
+Quelle) trifft nicht zu: die Teilmenge ist 34 KB, kommt vom eigenen Server und
+lädt getrennt vom WASM. iced liest kein woff2, deshalb die TTF im nativen Client.

@@ -42,6 +42,11 @@ fn main() -> iced::Result {
     START.get_or_init(Instant::now);
     update::cleanup();
     iced::application(App::boot, App::update, App::view)
+        .font(
+            include_bytes!("../../ui/assets/fonts/AtkinsonHyperlegibleNext-Regular.ttf").as_slice(),
+        )
+        .font(include_bytes!("../../ui/assets/fonts/AtkinsonHyperlegibleNext-Bold.ttf").as_slice())
+        .default_font(style::FONT)
         .title("Nova")
         .theme(App::theme)
         .style(App::style)
@@ -1863,7 +1868,7 @@ impl App {
         let page = match self.screen {
             Screen::Booting => container(
                 column![
-                    icon(Icon::Logo, 40.0, style::ACCENT),
+                    icon(Icon::Logo, 40.0, style::TEXT),
                     text("Sitzung wird geprüft…").color(style::MUTED),
                 ]
                 .spacing(16)
@@ -1891,12 +1896,12 @@ impl App {
                     update::CURRENT
                 ),
                 Some(("Jetzt aktualisieren", Message::InstallUpdate)),
-                style::ACCENT,
+                style::MUTED,
             ),
             UpdateState::Installing(version) => (
                 format!("Version {version} wird geladen und geprüft… Nova startet gleich neu."),
                 None,
-                style::ACCENT,
+                style::MUTED,
             ),
             UpdateState::Failed(err) => (
                 format!("Update fehlgeschlagen: {err}"),
@@ -1960,7 +1965,7 @@ impl App {
         let (glyph, color, label, message) = match &self.update {
             UpdateState::Available(a) => (
                 Icon::Download,
-                style::ACCENT,
+                style::TEXT,
                 format!("Update auf v{} installieren", a.version),
                 Some(Message::InstallUpdate),
             ),
@@ -2013,14 +2018,9 @@ impl App {
             "Melde dich an, um weiterzuschreiben."
         };
         let head = column![
-            container(icon(Icon::Logo, 32.0, style::ACCENT))
-                .center(60)
-                .style(style::brand_soft),
+            container(icon(Icon::Logo, 32.0, style::TEXT)).center(60),
             space().height(6),
-            text("Nova")
-                .size(26)
-                .font(style::SEMIBOLD)
-                .color(style::TEXT),
+            text("Nova").size(26).font(style::BOLD).color(style::TEXT),
             text(subtitle).size(14).color(style::MUTED),
         ]
         .spacing(4)
@@ -2069,16 +2069,11 @@ impl App {
         form = form
             .push(space().height(2))
             .push(
-                button(
-                    text(submit_label)
-                        .font(style::SEMIBOLD)
-                        .center()
-                        .width(Fill),
-                )
-                .on_press_maybe((!self.busy).then_some(Message::Submit))
-                .width(Fill)
-                .padding(12)
-                .style(style::primary),
+                button(text(submit_label).font(style::BOLD).center().width(Fill))
+                    .on_press_maybe((!self.busy).then_some(Message::Submit))
+                    .width(Fill)
+                    .padding(12)
+                    .style(style::primary),
             )
             .push(
                 container(
@@ -2190,7 +2185,7 @@ impl App {
             row![
                 text(label)
                     .size(18)
-                    .font(style::SEMIBOLD)
+                    .font(style::BOLD)
                     .color(style::TEXT)
                     .width(Fill),
                 button(icon_hover(Icon::Close, 16.0, style::MUTED, style::TEXT))
@@ -2332,7 +2327,7 @@ impl App {
                         let items = list.iter().map(|message| {
                             let mut head = row![
                                 text(message.author.display_name.clone())
-                                    .font(style::SEMIBOLD)
+                                    .font(style::BOLD)
                                     .size(14)
                                     .color(style::TEXT)
                                     .width(Fill),
@@ -2385,7 +2380,7 @@ impl App {
                 column![
                     text(&member.display_name)
                         .size(18)
-                        .font(style::SEMIBOLD)
+                        .font(style::BOLD)
                         .color(style::TEXT),
                     text(format!("@{}", member.handle))
                         .size(13)
@@ -2431,7 +2426,7 @@ impl App {
             card = card.push(
                 text(format!("Im Timeout bis {local}"))
                     .size(13)
-                    .color(style::WARN),
+                    .color(style::DANGER),
             );
         }
 
@@ -2610,7 +2605,7 @@ impl App {
             row![
                 text("Einstellungen")
                     .size(18)
-                    .font(style::SEMIBOLD)
+                    .font(style::BOLD)
                     .color(style::TEXT)
                     .width(Fill),
                 button(icon_hover(Icon::Close, 16.0, style::MUTED, style::TEXT))
@@ -2690,14 +2685,14 @@ impl App {
                 button(
                     text(initials(&guild.name))
                         .size(15)
-                        .font(style::SEMIBOLD)
+                        .font(style::BOLD)
                         .center()
                         .width(Fill)
                         .height(Fill)
                         .color(style::TEXT),
                 )
-                .width(48)
-                .height(48)
+                .width(44)
+                .height(44)
                 .padding(0)
                 .on_press(Message::SelectGuild(guild.id))
                 .style(move |theme, status| style::rail_button(theme, status, active)),
@@ -2709,9 +2704,9 @@ impl App {
         // darunter ein Trenner — Server beginnen erst danach.
         let rail_action = |glyph: Icon, label: &'static str, modal: Modal| {
             tip(
-                button(container(icon_hover(glyph, 20.0, style::ONLINE, style::TEXT)).center(Fill))
-                    .width(48)
-                    .height(48)
+                button(container(icon_hover(glyph, 20.0, style::MUTED, style::TEXT)).center(Fill))
+                    .width(44)
+                    .height(44)
                     .padding(0)
                     .on_press(Message::OpenModal(modal))
                     .style(|theme, status| style::rail_button(theme, status, false)),
@@ -2721,7 +2716,7 @@ impl App {
         };
         container(
             column![
-                container(icon(Icon::Logo, 26.0, style::ACCENT)).center(48),
+                container(icon(Icon::Logo, 26.0, style::TEXT)).center(44),
                 self.view_dm_button(),
                 container(space()).width(32).height(2).style(style::divider),
                 scrollable(column(guilds).spacing(8)).height(Length::Shrink),
@@ -2742,16 +2737,16 @@ impl App {
     fn view_me_bar(&self) -> Element<'_, Message> {
         let me = self.me.as_ref();
         let name = me.map(|m| m.display_name.as_str()).unwrap_or("?");
-        let (dot, label) = match self.status {
-            Status::Online => (style::ONLINE, "Online"),
-            Status::Connecting => (style::WARN, "Verbinde…"),
-            Status::Offline => (style::FAINT, "Offline"),
+        let (online, label) = match self.status {
+            Status::Online => (true, "Online"),
+            Status::Connecting => (false, "Verbinde…"),
+            Status::Offline => (false, "Offline"),
         };
         container(
             row![
-                avatar_with_status(name, 32.0, dot, style::RAIL),
+                avatar_with_status(name, 32.0, online, style::RAIL),
                 column![
-                    text(name).size(14).font(style::SEMIBOLD).color(style::TEXT),
+                    text(name).size(14).font(style::BOLD).color(style::TEXT),
                     text(label).size(12).color(style::MUTED),
                 ]
                 .spacing(1)
@@ -2829,20 +2824,54 @@ impl App {
                     {
                         channels = channels.push(self.channel_entry(thread, 18.0));
                     }
-                    // Sprachkanal: wer drin ist, steht darunter.
+                    // Sprachkanal: Avatar-Reihe (wer da ist, wer redet), darunter die Namen.
                     if kind == 1 {
-                        for person in self.voice_rooms.get(&channel.id).into_iter().flatten() {
+                        let people = self
+                            .voice_rooms
+                            .get(&channel.id)
+                            .map(Vec::as_slice)
+                            .unwrap_or_default();
+                        let talking = self.talking_in(channel.id);
+                        if !people.is_empty() {
+                            // Max. 6 Gesichter, je 4 px überlappend, dann „+n“.
+                            let mut faces = iced::widget::Stack::new();
+                            for (index, person) in people.iter().take(6).enumerate() {
+                                faces = faces.push(
+                                    container(voice_face(
+                                        &person.display_name,
+                                        talking.contains(&person.user_id),
+                                    ))
+                                    .padding(iced::Padding {
+                                        left: index as f32 * 20.0,
+                                        ..iced::Padding::ZERO
+                                    }),
+                                );
+                            }
+                            let mut line = row![space().width(34), faces]
+                                .spacing(6)
+                                .padding([4, 8])
+                                .align_y(iced::Center);
+                            if people.len() > 6 {
+                                line = line.push(
+                                    text(format!("+{}", people.len() - 6))
+                                        .size(12)
+                                        .color(style::FAINT),
+                                );
+                            }
+                            channels = channels.push(line);
+                        }
+                        for person in people {
+                            let speaking = talking.contains(&person.user_id);
                             channels = channels.push(
                                 row![
-                                    space().width(26),
-                                    avatar(&person.display_name, 20.0),
+                                    space().width(34),
                                     text(person.display_name.clone())
                                         .size(13)
-                                        .color(style::MUTED),
+                                        .color(if speaking { style::TEXT } else { style::MUTED }),
                                     live_tag(person.screen),
                                 ]
                                 .spacing(8)
-                                .padding([2, 8])
+                                .padding([1, 8])
                                 .align_y(iced::Center),
                             );
                         }
@@ -2854,7 +2883,7 @@ impl App {
                 container(
                     column![
                         text("Noch kein Server")
-                            .font(style::SEMIBOLD)
+                            .font(style::BOLD)
                             .color(style::TEXT),
                         text("Leg einen eigenen Server an oder tritt mit einer Einladung bei.")
                             .size(13)
@@ -2882,7 +2911,7 @@ impl App {
         let mut head = row![
             text(title)
                 .size(15)
-                .font(style::SEMIBOLD)
+                .font(style::BOLD)
                 .color(style::TEXT)
                 .width(Fill)
         ]
@@ -2928,7 +2957,7 @@ impl App {
             .width(Fill)
             .wrapping(text::Wrapping::None);
         if unread {
-            name = name.font(style::SEMIBOLD);
+            name = name.font(style::BOLD);
         }
         let mut line = row![
             icon(
@@ -2948,15 +2977,44 @@ impl App {
                     .style(style::unread_dot),
             );
         }
+        // Ausgewählt: Akzent-Fläche plus 2-px-Streifen links.
+        let stripe: Element<'a, Message> = if active {
+            container(
+                container(space())
+                    .width(2)
+                    .height(Fill)
+                    .style(style::accent_stripe),
+            )
+            .padding([6, 0])
+            .height(Fill)
+            .into()
+        } else {
+            space().width(2).into()
+        };
         row![
             space().width(indent),
+            stripe,
             button(line)
                 .width(Fill)
                 .padding([if indent > 0.0 { 5 } else { 7 }, 8])
                 .on_press(Message::OpenChannel(channel.id))
                 .style(move |theme, status| style::channel_button(theme, status, active)),
         ]
+        .height(Length::Shrink)
         .into()
+    }
+
+    /// Wer in diesem Sprachkanal gerade spricht; bekannt nur, wenn man selbst drin ist.
+    fn talking_in(&self, channel_id: i64) -> Vec<i64> {
+        if self.voice.as_ref().map(|v| v.channel_id) != Some(channel_id) {
+            return Vec::new();
+        }
+        let me = self.me_id();
+        self.voice_status
+            .speaking
+            .iter()
+            .map(|id| if *id == -1 { me } else { *id })
+            .collect()
     }
 
     fn view_voice<'a>(&'a self, channel: &'a Channel) -> Element<'a, Message> {
@@ -2996,22 +3054,18 @@ impl App {
             let mut name_row = row![
                 text(person.display_name.clone())
                     .size(13)
-                    .color(style::TEXT)
+                    .font(style::BOLD)
+                    .color(if talking {
+                        style::ON_ACCENT
+                    } else {
+                        style::TEXT
+                    })
                     .wrapping(text::Wrapping::None)
             ]
             .spacing(6)
             .align_y(iced::Center);
             if live {
-                name_row = name_row.push(
-                    container(
-                        text("LIVE")
-                            .size(9)
-                            .font(style::SEMIBOLD)
-                            .color(style::ON_ACCENT),
-                    )
-                    .padding([1, 4])
-                    .style(|_: &Theme| style::tag(style::DANGER)),
-                );
+                name_row = name_row.push(live_tag(true));
             }
             if muted {
                 name_row = name_row.push(icon(
@@ -3024,6 +3078,10 @@ impl App {
                     style::DANGER,
                 ));
             }
+            // Namensbalken füllt sich gelb, solange die Person spricht.
+            let name_row = container(name_row)
+                .padding([2, 6])
+                .style(move |_: &Theme| style::name_bar(talking));
             // Wer streamt, zeigt sein Bild statt des Avatars.
             let face: Element<'a, Message> = match &picture {
                 Some(picture) => iced::widget::image(picture.handle.clone())
@@ -3074,7 +3132,7 @@ impl App {
         let sharing = self.sharing;
         let controls: Element<'_, Message> = if here {
             let state = if !status.connected {
-                text("Verbinde …").color(style::WARN)
+                text("Verbinde …").color(style::MUTED)
             } else if sharing && status.sharing {
                 let size = status
                     .share_size
@@ -3086,7 +3144,7 @@ impl App {
                 ))
                 .color(style::ONLINE)
             } else if sharing {
-                text("Bildschirm wird vorbereitet …").color(style::WARN)
+                text("Bildschirm wird vorbereitet …").color(style::MUTED)
             } else {
                 text("Verbunden").color(style::ONLINE)
             };
@@ -3209,7 +3267,7 @@ impl App {
         }
         body = body.push(grid);
         if here && let Some(warning) = &status.error {
-            body = body.push(text(warning.clone()).size(13).color(style::WARN));
+            body = body.push(text(warning.clone()).size(13).color(style::DANGER));
         }
         if here {
             body = body.push(
@@ -3268,7 +3326,7 @@ impl App {
             .unwrap_or_default();
         let tool = |glyph: Icon, label: &'static str, msg: Message| -> Element<'_, Message> {
             tip(
-                button(icon_hover(glyph, 18.0, style::TEXT, style::ACCENT))
+                button(icon_hover(glyph, 18.0, style::MUTED, style::TEXT))
                     .padding(8)
                     .on_press(msg)
                     .style(|theme, status| style::icon_button(theme, status, false)),
@@ -3278,15 +3336,8 @@ impl App {
         };
         let bar = container(
             row![
-                container(
-                    text("LIVE")
-                        .size(10)
-                        .font(style::SEMIBOLD)
-                        .color(style::ON_ACCENT),
-                )
-                .padding([2, 6])
-                .style(|_: &Theme| style::tag(style::DANGER)),
-                text(name).size(14).font(style::SEMIBOLD).color(style::TEXT),
+                live_tag(true),
+                text(name).size(14).font(style::BOLD).color(style::TEXT),
                 text(format!("{}×{}", picture.width, picture.height))
                     .size(12)
                     .color(style::MUTED),
@@ -3333,7 +3384,7 @@ impl App {
             if active { style::TEXT } else { style::MUTED },
             style::TEXT,
         );
-        let mut face = stack![container(glyph).center(48)];
+        let mut face = stack![container(glyph).center(44)];
         if unread && !active {
             face = face.push(
                 container(
@@ -3342,16 +3393,16 @@ impl App {
                         .height(10)
                         .style(style::unread_dot),
                 )
-                .width(48)
-                .height(48)
+                .width(44)
+                .height(44)
                 .align_x(iced::alignment::Horizontal::Right)
                 .padding(4),
             );
         }
         tip(
             button(face)
-                .width(48)
-                .height(48)
+                .width(44)
+                .height(44)
                 .padding(0)
                 .on_press(Message::OpenHome)
                 .style(move |theme, status| style::rail_button(theme, status, active)),
@@ -3423,7 +3474,7 @@ impl App {
                 })
                 .wrapping(text::Wrapping::None);
             if unread {
-                name = name.font(style::SEMIBOLD);
+                name = name.font(style::BOLD);
             }
             let mut line = row![
                 avatar(&dm.user.display_name, 28.0),
@@ -3459,7 +3510,7 @@ impl App {
             header_bar(
                 text("Direktnachrichten")
                     .size(15)
-                    .font(style::SEMIBOLD)
+                    .font(style::BOLD)
                     .color(style::TEXT)
             ),
             container(top).padding([8, 12]),
@@ -3480,7 +3531,7 @@ impl App {
             let header = header_bar(
                 text("Direktnachrichten")
                     .size(15)
-                    .font(style::SEMIBOLD)
+                    .font(style::BOLD)
                     .color(style::TEXT),
             );
             let body = empty_state(
@@ -3495,7 +3546,7 @@ impl App {
                 avatar(&peer.user.display_name, 24.0),
                 text(&peer.user.display_name)
                     .size(15)
-                    .font(style::SEMIBOLD)
+                    .font(style::BOLD)
                     .color(style::TEXT),
                 text(format!("@{}", peer.user.handle))
                     .size(13)
@@ -3539,7 +3590,7 @@ impl App {
             ),
             text(channel.map(|c| c.name.as_str()).unwrap_or("Nova"))
                 .size(15)
-                .font(style::SEMIBOLD)
+                .font(style::BOLD)
                 .color(style::TEXT),
         ]
         .spacing(8)
@@ -3787,9 +3838,14 @@ impl App {
             } else {
                 style::TEXT
             };
-            let mut line = row![text(&message.content).color(color)]
-                .spacing(6)
-                .align_y(iced::Center);
+            let mut line = row![
+                text(&message.content)
+                    .size(15)
+                    .line_height(1.5)
+                    .color(color)
+            ]
+            .spacing(6)
+            .align_y(iced::Center);
             if message.edited {
                 line = line.push(text("(bearbeitet)").size(11).color(style::FAINT));
             }
@@ -3824,7 +3880,7 @@ impl App {
         } else {
             let mut head = row![
                 text(&message.author)
-                    .font(style::SEMIBOLD)
+                    .font(style::BOLD)
                     .color(style::TEXT)
                     .size(15),
                 text(&message.time).color(style::FAINT).size(12),
@@ -3832,7 +3888,7 @@ impl App {
             .spacing(8)
             .align_y(iced::Center);
             if message.pinned {
-                head = head.push(icon(Icon::Pin, 12.0, style::WARN));
+                head = head.push(icon(Icon::Pin, 12.0, style::FAINT));
             }
             row![
                 avatar(&message.author, 36.0),
@@ -3950,7 +4006,6 @@ impl App {
             }
             list = list.push(section_count(label, members.len()));
             for member in members {
-                let dot = if online { style::ONLINE } else { style::FAINT };
                 let mut name = row![
                     text(&member.display_name)
                         .color(if online { style::TEXT } else { style::FAINT })
@@ -3960,23 +4015,18 @@ impl App {
                 .align_y(iced::Center);
                 if member.bot {
                     name = name.push(
-                        container(
-                            text("BOT")
-                                .size(9)
-                                .font(style::SEMIBOLD)
-                                .color(style::ON_ACCENT),
-                        )
-                        .padding([1, 4])
-                        .style(|_: &Theme| style::tag(style::ACCENT)),
+                        container(text("Bot").size(10).font(style::BOLD).color(style::MUTED))
+                            .padding([1, 4])
+                            .style(|_: &Theme| style::tag(style::RAISED_HI)),
                     );
                 }
                 if member.timeout_until.is_some() {
-                    name = name.push(icon(Icon::MicOff, 12.0, style::WARN));
+                    name = name.push(icon(Icon::MicOff, 12.0, style::FAINT));
                 }
                 list = list.push(
                     button(
                         row![
-                            avatar_with_status(&member.display_name, 32.0, dot, style::SIDEBAR),
+                            avatar_with_status(&member.display_name, 32.0, online, style::SIDEBAR),
                             name,
                         ]
                         .spacing(10)
@@ -3998,7 +4048,7 @@ impl App {
                 row![
                     text("Mitglieder")
                         .size(13)
-                        .font(style::SEMIBOLD)
+                        .font(style::BOLD)
                         .color(style::MUTED),
                     text(detail.members.len()).size(13).color(style::FAINT),
                 ]
@@ -4045,44 +4095,31 @@ fn vline<'a>(height: impl Into<Length>) -> Element<'a, Message> {
 
 /// Abschnittsüberschrift in Dialogen, bündig mit den Feldern.
 fn modal_label<'a>(label: &'a str) -> Element<'a, Message> {
-    container(
-        text(label)
-            .size(12)
-            .font(style::SEMIBOLD)
-            .color(style::FAINT),
-    )
-    .padding(iced::Padding {
-        top: 8.0,
-        ..iced::Padding::ZERO
-    })
-    .into()
+    container(text(label).size(12).font(style::BOLD).color(style::FAINT))
+        .padding(iced::Padding {
+            top: 8.0,
+            ..iced::Padding::ZERO
+        })
+        .into()
 }
 
 /// Abschnittsüberschrift in normaler Schreibweise (keine Versalien-Labels).
 fn section_label<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
-    container(
-        text(label)
-            .size(12)
-            .font(style::SEMIBOLD)
-            .color(style::FAINT),
-    )
-    .padding(iced::Padding {
-        top: 18.0,
-        right: 8.0,
-        bottom: 6.0,
-        left: 8.0,
-    })
-    .into()
+    container(text(label).size(12).font(style::BOLD).color(style::FAINT))
+        .padding(iced::Padding {
+            top: 18.0,
+            right: 8.0,
+            bottom: 6.0,
+            left: 8.0,
+        })
+        .into()
 }
 
 /// Abschnitt mit Anzahl, z. B. „Online 2“: die Zahl leiser statt mit Gedankenstrich.
 fn section_count(label: &str, count: usize) -> Element<'_, Message> {
     container(
         row![
-            text(label)
-                .size(12)
-                .font(style::SEMIBOLD)
-                .color(style::FAINT),
+            text(label).size(12).font(style::BOLD).color(style::FAINT),
             text(count).size(12).color(style::FAINT),
         ]
         .spacing(6),
@@ -4121,14 +4158,11 @@ fn tip<'a>(
 fn empty_state<'a>(glyph: Icon, title: String, body: &'a str) -> Element<'a, Message> {
     container(
         column![
-            container(icon(glyph, 28.0, style::ACCENT))
+            container(icon(glyph, 28.0, style::MUTED))
                 .center(64)
                 .style(style::badge),
             space().height(4),
-            text(title)
-                .size(18)
-                .font(style::SEMIBOLD)
-                .color(style::TEXT),
+            text(title).size(18).font(style::BOLD).color(style::TEXT),
             text(body).color(style::MUTED),
         ]
         .spacing(6)
@@ -4143,7 +4177,7 @@ fn avatar<'a>(name: &str, size: f32) -> Element<'a, Message> {
     container(
         text(initials(name))
             .size(size * 0.38)
-            .font(style::SEMIBOLD)
+            .font(style::BOLD)
             .color(style::TEXT),
     )
     .center(size)
@@ -4152,15 +4186,24 @@ fn avatar<'a>(name: &str, size: f32) -> Element<'a, Message> {
 }
 
 /// Avatar mit Statuspunkt unten rechts; `ring` ist die Farbe der Fläche dahinter.
-fn avatar_with_status<'a>(name: &str, size: f32, dot: Color, ring: Color) -> Element<'a, Message> {
-    let diameter = (size * 0.36).round().max(10.0);
+/// Status über Form: online gefüllter Punkt, sonst hohler Ring.
+fn avatar_with_status<'a>(
+    name: &str,
+    size: f32,
+    online: bool,
+    ring: Color,
+) -> Element<'a, Message> {
     stack![
         avatar(name, size),
         container(
-            container(space())
-                .width(diameter)
-                .height(diameter)
-                .style(move |_: &Theme| style::status_dot(dot, ring)),
+            container(
+                container(space())
+                    .width(10)
+                    .height(10)
+                    .style(move |_: &Theme| style::presence(online)),
+            )
+            .padding(2)
+            .style(move |_: &Theme| style::avatar(ring)),
         )
         .width(Fill)
         .height(Fill)
@@ -4168,6 +4211,30 @@ fn avatar_with_status<'a>(name: &str, size: f32, dot: Color, ring: Color) -> Ele
         .align_y(iced::alignment::Vertical::Bottom),
     ]
     .into()
+}
+
+/// Kleiner Avatar in der Reihe unter einem Sprachkanal: Ring in Flächenfarbe
+/// trennt die Überlappung, wer spricht, bekommt Gelb und rückt 2 px hoch.
+fn voice_face<'a>(name: &str, speaking: bool) -> Element<'a, Message> {
+    let tint = style::avatar_tint(name);
+    let ring = if speaking {
+        style::SPEAKING
+    } else {
+        style::SIDEBAR
+    };
+    let face = container(
+        text(initials(name))
+            .size(8)
+            .font(style::BOLD)
+            .color(style::TEXT),
+    )
+    .center(24)
+    .style(move |_: &Theme| style::avatar_ring(tint, ring));
+    let lift = iced::Padding {
+        top: if speaking { 0.0 } else { 2.0 },
+        ..iced::Padding::ZERO
+    };
+    container(face).padding(lift).height(26).into()
 }
 
 /// Kanalnamen wie der Server sie annimmt: ohne Leerzeichen und `#`, max. 48
@@ -4195,19 +4262,19 @@ fn dev_flag(name: &str) -> bool {
     cfg!(debug_assertions) && std::env::var_os(name).is_some()
 }
 
-/// Rotes „LIVE“ für Streamende; leer, wenn nicht.
+/// „Live“ in Nova-Gelb für Streamende; leer, wenn nicht.
 fn live_tag<'a>(live: bool) -> Element<'a, Message> {
     if !live {
         return space().width(0).into();
     }
     container(
-        text("LIVE")
-            .size(9)
-            .font(style::SEMIBOLD)
+        text("Live")
+            .size(10)
+            .font(style::BOLD)
             .color(style::ON_ACCENT),
     )
     .padding([1, 4])
-    .style(|_: &Theme| style::tag(style::DANGER))
+    .style(|_: &Theme| style::tag(style::ACCENT))
     .into()
 }
 

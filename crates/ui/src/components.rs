@@ -154,7 +154,7 @@ pub fn Avatar(
                 StatusDot { status, ring: true }
             }
             if bot {
-                span { class: "nv-avatar__bot", "BOT" }
+                span { class: "nv-avatar__bot", "Bot" }
             }
         }
     }

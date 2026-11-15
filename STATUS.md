@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 15.11.2026 · **Version:** 0.6.0 (Direktnachrichten, Hover-Zeichenfehler behoben)
+**Stand:** 15.11.2026 · **Version:** 0.7.0 (Design „Funkraum“, Schrift Atkinson Hyperlegible Next)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
@@ -135,13 +135,35 @@ Server-Release-Build waren vor den Änderungen **grün**.
   danach nach acht Runden kein Pixel verändert. Der erste Versuch (jede
   Mausaktion durch `update` schicken) half nicht und ist wieder entfernt.
 
-### Design-Durchgang nach „frontend-design“ (nach 0.6.0, noch nicht released)
+### Design-Durchgang nach „frontend-design“ (0.7.0)
 - Keine Versalien-Labels mehr (Textkanäle, Online, Profil …), Anzahlen leise
   neben dem Label statt „ONLINE — 2“, keine „A · B“-Metazeilen.
 - Texte aus Nutzersicht: „Benutzername“ statt „Handle“, Hinweise als Sätze,
   Technik-Fußzeilen („Nativ · Rust“) entfernt.
 - Nativer Client verlangte bei der Registrierung 8 Zeichen Passwort, der
   Server 10: Hinweis und Prüfung angeglichen.
+
+### Design „Funkraum“ (0.7.0, 15.11.2026)
+- Neues Erscheinungsbild für Web und nativen Client, beschrieben in
+  `docs/02-design.md` und im Skill `nova-design-system`: bläulich-tintige
+  Flächen, **Nova-Gelb** nur für live/aktiv/ausgewählt/Primärknopf, Violett
+  komplett entfernt (auch Logo, Fokusring, Erwähnungen, App-Icons).
+- Schrift **Atkinson Hyperlegible Next** (OFL) statt Inter: Web eine variable
+  woff2 (lateinische Teilmenge, 400–700) mit **34 KB**, selbst ausgeliefert;
+  nativ dieselbe Schrift als TTF (2 × 46 KB, iced liest kein woff2).
+- Status über Form (online Punkt, abwesend Halbmond, nicht stören Querbalken,
+  offline Ring). Server-Icons immer abgerundete Quadrate mit gelbem Ring statt
+  Kreis-zu-Quadrat und Pill-Marker; ausgewählter Kanal mit Streifen.
+- Signature Voice: Avatar-Reihe unter belegten Sprachkanälen (Sprecher mit
+  gelbem Ring, rückt hoch), Kacheln mit gelbem Namensbalken beim Sprechen,
+  Kacheln erscheinen einmal nacheinander direkt nach dem Beitreten.
+- Login: Formularspalte links, statischer Lounge-Ausschnitt rechts (≥ 900 px).
+- Nativer Client nutzt exakt die Dark-Tokens; neuer Test
+  `tokens_match_web_css` liest `app.css` und bricht bei Abweichungen.
+- Messwerte: WASM gzip **502 KB** (vorher 500 KB, +2,9 KB), roh 1.281 KB;
+  Schrift 34 KB als eigene, cachebare Datei. 20 Screenshots neu (alle
+  Bildschirme in Dark und Light). Nativer Client: 35 MB Working Set nach
+  10 s (vorher ~32 MB), erste Ansicht nach 20 ms.
 
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
@@ -185,7 +207,8 @@ WASM 501 KB gzip.
 4. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
    Systemaudio; Kamera.
 5. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
-6. Inter/JetBrains Mono lokal einbetten (Entscheidung offen, s. DECISIONS).
+6. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
+   Ungelesen-Daten für alle Server (die API liefert sie nur für den offenen).
 7. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
 
 ---
