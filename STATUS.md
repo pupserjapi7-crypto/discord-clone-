@@ -125,11 +125,15 @@ Server-Release-Build waren vor den Änderungen **grün**.
 - **Nicht gebaut:** DMs in der Web-App (sie ignoriert das neue Event),
   Bearbeiten/Löschen/Reaktionen in DMs, Blockieren.
 - Hover-Zeichenfehler im nativen Client (schwarze Flächen beim Überfahren):
-  iced zeichnet Hover-Effekte ohne `update` und damit nur in Teilbereichen,
-  das ging mit tiny-skia schief. Jede Mausaktion läuft jetzt durch `update`,
-  damit jedes Bild vollständig gezeichnet wird. Nach einer Maus-Runde über
-  Leiste, Nachrichten und Tooltips keine Reste mehr; das Original-Fehlerbild
-  ließ sich in der Automation nicht gezielt nachstellen.
+  **Ursache:** iced_tiny_skia 0.14.1 malt Schatten ohne Clip-Maske über das
+  ganze Schattenrechteck, auch bei Teil-Neuzeichnungen. Jeder Hover in einem
+  Dialog (oder neben einem Tooltip) legte den halbtransparenten Schatten
+  erneut über die unveränderten Pixel; nach ein paar Durchgängen war die
+  Dialogkarte schwarz. Nachgestellt im Einstellungsdialog: Kartenfarbe
+  RGB(30,32,38) → (12,13,17) nach vier Hover-Runden. **Fix:** keine Schatten
+  im nativen Client (`style::NO_SHADOW`, Test `styles_have_no_shadows`);
+  danach nach acht Runden kein Pixel verändert. Der erste Versuch (jede
+  Mausaktion durch `update` schicken) half nicht und ist wieder entfernt.
 
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,

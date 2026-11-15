@@ -123,6 +123,21 @@ pub fn backdrop(_: &Theme) -> container::Style {
     }
 }
 
+/// Schatten sind im nativen Client verboten.
+///
+/// iced_tiny_skia 0.14.1 malt Schatten ohne Clip-Maske über das ganze
+/// Schattenrechteck (inklusive der Fläche unter dem Element), auch wenn nur ein
+/// kleiner Bereich neu gezeichnet wird. Bei jeder Teil-Neuzeichnung (Hover über
+/// einen Knopf, blinkender Cursor) legt sich der halbtransparente Schatten
+/// erneut über die unveränderten Pixel; nach ein paar Durchgängen wird die
+/// Fläche schwarz. Tiefe entsteht deshalb nur über Flächenfarbe und
+/// `BORDER_STRONG`. Der Test `styles_have_no_shadows` hält das fest.
+pub const NO_SHADOW: Shadow = Shadow {
+    color: Color::TRANSPARENT,
+    offset: iced::Vector::ZERO,
+    blur_radius: 0.0,
+};
+
 /// Dialogkarte über dem Backdrop.
 pub fn modal(_: &Theme) -> container::Style {
     container::Style {
@@ -131,14 +146,8 @@ pub fn modal(_: &Theme) -> container::Style {
             width: 1.0,
             radius: 14.0.into(),
         },
-        shadow: Shadow {
-            color: Color {
-                a: 0.45,
-                ..Color::BLACK
-            },
-            offset: iced::Vector::new(0.0, 12.0),
-            blur_radius: 32.0,
-        },
+        // Kein Schatten: siehe `NO_SHADOW`.
+        shadow: NO_SHADOW,
         ..fill(SIDEBAR)
     }
 }
@@ -370,11 +379,7 @@ pub fn tooltip(_: &Theme) -> container::Style {
             width: 1.0,
             radius: 6.0.into(),
         },
-        shadow: Shadow {
-            color: Color::from_rgba(0.0, 0.0, 0.0, 0.35),
-            offset: iced::Vector::new(0.0, 2.0),
-            blur_radius: 8.0,
-        },
+        shadow: NO_SHADOW,
         ..fill(RAIL)
     }
 }
@@ -518,5 +523,69 @@ pub fn rail_button(_: &Theme, status: button::Status, active: bool) -> button::S
             radius: radius.into(),
         },
         ..base_button(Some(background), TEXT, radius)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Schatten werden in iced_tiny_skia bei Teil-Neuzeichnungen immer wieder
+    /// übereinandergemalt und färben Flächen schwarz (siehe `NO_SHADOW`).
+    #[test]
+    fn styles_have_no_shadows() {
+        let theme = theme();
+        type ContainerStyle = fn(&Theme) -> container::Style;
+        let containers: [(&str, ContainerStyle); 19] = [
+            ("voice_bar", voice_bar),
+            ("backdrop", backdrop),
+            ("modal", modal),
+            ("message_tools", message_tools),
+            ("message_hover", message_hover),
+            ("stage", stage),
+            ("stage_bar", stage_bar),
+            ("unread_dot", unread_dot),
+            ("danger_note", danger_note),
+            ("app_bg", app_bg),
+            ("rail", rail),
+            ("sidebar", sidebar),
+            ("card", card),
+            ("toast", toast),
+            ("divider", divider),
+            ("badge", badge),
+            ("brand_soft", brand_soft),
+            ("tooltip", tooltip),
+            ("composer", composer),
+        ];
+        for (name, style) in containers {
+            assert_eq!(
+                style(&theme).shadow.color.a,
+                0.0,
+                "{name} hat einen Schatten"
+            );
+        }
+        let statuses = [
+            button::Status::Active,
+            button::Status::Hovered,
+            button::Status::Pressed,
+            button::Status::Disabled,
+        ];
+        for status in statuses {
+            let buttons = [
+                danger_button(&theme, status),
+                reaction(&theme, status, true),
+                primary(&theme, status),
+                ghost(&theme, status),
+                link(&theme, status),
+                icon_button(&theme, status, true),
+                danger_icon_button(&theme, status),
+                send_button(&theme, status),
+                channel_button(&theme, status, true),
+                rail_button(&theme, status, true),
+            ];
+            for style in buttons {
+                assert_eq!(style.shadow.color.a, 0.0, "Knopf mit Schatten");
+            }
+        }
     }
 }

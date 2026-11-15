@@ -482,23 +482,15 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // Hover-Effekte zeichnet iced sonst ohne `update` neu – mit altem
-        // Hintergrund, also nur in Teilbereichen, und tiny-skia hinterlässt
-        // dabei schwarze oder veraltete Flächen. Jede Mausaktion läuft deshalb
-        // einmal durch `update`, damit `style` ein volles Bild erzwingt.
-        let pointer = iced::event::listen_with(|event, _, _| match event {
-            iced::Event::Mouse(_) => Some(Message::Ignore),
-            _ => None,
-        });
         if self.screen != Screen::Chat {
-            return pointer;
+            return Subscription::none();
         }
         let gateway = gateway::subscription(gateway::Params {
             epoch: self.epoch,
             api: self.api.clone(),
         })
         .map(Message::Gateway);
-        let mut subs = vec![gateway, pointer, keyboard::listen().map(Message::Key)];
+        let mut subs = vec![gateway, keyboard::listen().map(Message::Key)];
         if self.voice.is_some() {
             // Sprecher-Ring und Status fünfmal pro Sekunde; läuft ein Stream,
             // so oft wie Bilder kommen (30 fps).

@@ -51,6 +51,10 @@ Theme: `data-theme="dark|light"` auf `<html>`; ohne Attribut folgt Light
 - Radius: 6 Badges, 10 Buttons/Inputs, 14 Karten/Modals, 999 Avatare/Pills.
 - Schatten nur für Schwebendes: `0 8px 24px rgba(0,0,0,.35)` + 1 px
   `--nv-line-strong` (`--nv-shadow`).
+- **Nativer Client: keine Schatten** (`style::NO_SHADOW`). iced_tiny_skia
+  0.14.1 malt Schatten bei Teil-Neuzeichnungen ungeclippt immer wieder
+  übereinander → Flächen werden schwarz. Tiefe dort nur über Flächenfarbe und
+  `BORDER_STRONG`; der Test `styles_have_no_shadows` prüft das.
 
 ## Layout
 
