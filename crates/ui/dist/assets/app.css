@@ -337,7 +337,7 @@ h1, h2, h3, strong, b { font-weight: 600; }
 .nv-group__label {
     flex: 1; display: flex; align-items: center; gap: var(--nv-s-1);
     min-height: 28px; font-size: var(--nv-fs-12); font-weight: 600;
-    color: var(--nv-text-3); text-transform: uppercase; letter-spacing: 0.06em; text-align: left;
+    color: var(--nv-text-3); text-align: left;
 }
 .nv-group__label:hover { color: var(--nv-text-2); }
 .nv-group__label .nv-icon { transition: transform var(--nv-fast) var(--nv-ease); }
@@ -522,7 +522,9 @@ h1, h2, h3, strong, b { font-weight: 600; }
 .nv-members__head, .nv-thread__head { height: var(--nv-header); flex: none; display: flex; align-items: center; gap: var(--nv-s-2); padding: 0 var(--nv-s-2) 0 var(--nv-s-4); border-bottom: 1px solid var(--nv-line); }
 .nv-members__head h2, .nv-thread__head h2 { flex: 1; font-size: var(--nv-fs-14); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nv-members__scroll { flex: 1; overflow-y: auto; padding: var(--nv-s-2); }
-.nv-members__label { padding: var(--nv-s-3) var(--nv-s-2) var(--nv-s-1); font-size: var(--nv-fs-12); font-weight: 600; color: var(--nv-text-3); text-transform: uppercase; letter-spacing: 0.06em; }
+.nv-members__label { padding: var(--nv-s-3) var(--nv-s-2) var(--nv-s-1); font-size: var(--nv-fs-12); font-weight: 600; color: var(--nv-text-3); }
+/* Anzahl leiser neben dem Label statt „Online — 2“. */
+.nv-members__count { margin-left: var(--nv-s-1); font-weight: 400; font-variant-numeric: tabular-nums; }
 .nv-member {
     width: 100%; display: flex; align-items: center; gap: var(--nv-s-3);
     min-height: 40px; padding: 4px var(--nv-s-2); border-radius: var(--nv-r-control); text-align: left;
@@ -660,7 +662,7 @@ button.nv-list__item:hover { background: var(--nv-bg-4); }
 .nv-palette__search input { flex: 1; height: 52px; border: 0; background: transparent; font-size: var(--nv-fs-15); }
 .nv-palette__search input:focus-visible { outline: none; }
 .nv-palette__list { max-height: 380px; overflow-y: auto; padding: var(--nv-s-2); }
-.nv-palette__group { padding: var(--nv-s-2) var(--nv-s-3) var(--nv-s-1); font-size: var(--nv-fs-12); font-weight: 600; color: var(--nv-text-3); text-transform: uppercase; letter-spacing: 0.06em; }
+.nv-palette__group { padding: var(--nv-s-2) var(--nv-s-3) var(--nv-s-1); font-size: var(--nv-fs-12); font-weight: 600; color: var(--nv-text-3); }
 .nv-palette__item { width: 100%; display: flex; align-items: center; gap: var(--nv-s-3); min-height: 40px; padding: 0 var(--nv-s-3); border-radius: var(--nv-r-control); text-align: left; color: var(--nv-text-2); }
 .nv-palette__item span.nv-palette__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--nv-text-1); }
 .nv-palette__item span.nv-palette__hint { font-size: var(--nv-fs-12); color: var(--nv-text-3); }
@@ -718,7 +720,6 @@ button.nv-list__item:hover { background: var(--nv-bg-4); }
 .nv-auth__panel { display: grid; gap: var(--nv-s-4); padding: var(--nv-s-6); background: var(--nv-bg-2); border: 1px solid var(--nv-line); border-radius: var(--nv-r-card); }
 .nv-auth__switch { text-align: center; color: var(--nv-text-2); font-size: var(--nv-fs-13); }
 .nv-auth__switch button { color: var(--nv-accent); font-weight: 600; }
-.nv-auth__foot { text-align: center; font-size: var(--nv-fs-12); color: var(--nv-text-3); }
 .nv-onboard { margin: auto; width: min(640px, 100%); padding: var(--nv-s-8) var(--nv-s-6); display: grid; gap: var(--nv-s-6); }
 .nv-onboard h1 { font-size: var(--nv-fs-28); letter-spacing: -0.01em; }
 .nv-onboard > p { color: var(--nv-text-2); margin-top: calc(-1 * var(--nv-s-4)); }

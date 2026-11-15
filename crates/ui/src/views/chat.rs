@@ -367,7 +367,7 @@ fn MessageRow(
                             },
                         }
                     }
-                    span { class: "nv-faint", style: "font-size: 12px", "Enter speichern · Esc abbrechen" }
+                    span { class: "nv-faint", style: "font-size: 12px", "Enter speichert, Esc bricht ab" }
                 } else {
                     div { class: "nv-msg__text", {render_text(&message.content)} }
                 }
@@ -622,8 +622,8 @@ fn Composer(channel: Channel) -> Element {
                     }
                 }
                 span { class: "nv-faint",
-                    if channel.slowmode_secs > 0 { "Slowmode {channel.slowmode_secs}s · " }
-                    "Enter senden · Umschalt+Enter neue Zeile"
+                    if channel.slowmode_secs > 0 { "Slowmode {channel.slowmode_secs} s. " }
+                    "Enter sendet, Umschalt+Enter macht eine neue Zeile."
                 }
             }
             button { class: "sr-only", onclick: move |_| send_click(), "Senden" }
@@ -709,7 +709,7 @@ pub fn PinsPopover() -> Element {
                 div { key: "{pin.id}", class: "nv-pin",
                     div { class: "nv-pin__head",
                         strong { "{pin.author.display_name}" }
-                        span { class: "nv-faint", "{day_label(&pin.created_at)} · {time_label(&pin.created_at)}" }
+                        span { class: "nv-faint", "{day_label(&pin.created_at)}, {time_label(&pin.created_at)}" }
                     }
                     div { class: "nv-msg__text", "{pin.content}" }
                 }

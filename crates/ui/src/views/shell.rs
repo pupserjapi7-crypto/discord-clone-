@@ -678,7 +678,10 @@ fn MemberList() -> Element {
             div { class: "nv-members__scroll",
                 for (label, list) in groups {
                     if !list.is_empty() {
-                        div { key: "{label}", class: "nv-members__label", "{label} — {list.len()}" }
+                        div { key: "{label}", class: "nv-members__label",
+                            "{label}"
+                            span { class: "nv-members__count", "{list.len()}" }
+                        }
                         for member in list {
                             {
                                 let offline = label == "Offline";

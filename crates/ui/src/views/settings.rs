@@ -92,7 +92,7 @@ fn ProfileTab() -> Element {
                 div { class: "nv-field",
                     label { class: "nv-field__label", r#for: "profile-name", "Anzeigename" }
                     input { id: "profile-name", class: "nv-input", maxlength: "48", value: "{name}", oninput: move |e| name.set(e.value()) }
-                    span { class: "nv-field__hint", "Handle: @{handle} – der Handle bleibt fest." }
+                    span { class: "nv-field__hint", "Dein Benutzername @{handle} lässt sich nicht ändern." }
                 }
                 div { class: "nv-row",
                     button { r#type: "submit", class: "nv-btn nv-btn--primary", disabled: busy(), "Speichern" }
@@ -613,7 +613,7 @@ fn BansTab() -> Element {
                                     div { key: "{ban.user_id}", class: "nv-list__item",
                                         div { class: "nv-list__main",
                                             div { class: "nv-list__title", "{ban.display_name} (@{ban.handle})" }
-                                            div { class: "nv-list__sub", "{ban.reason.clone().unwrap_or_else(|| \"Kein Grund angegeben\".into())} · {day_label(&ban.created_at)}" }
+                                            div { class: "nv-list__sub", "{ban.reason.clone().unwrap_or_else(|| \"Kein Grund angegeben\".into())}, gebannt am {day_label(&ban.created_at)}" }
                                         }
                                         button {
                                             class: "nv-btn nv-btn--sm",
@@ -707,8 +707,8 @@ fn AuditTab() -> Element {
                                     }
                                     div { class: "nv-list__sub",
                                         span { class: "nv-audit__action", "{entry.action}" }
-                                        if let Some(detail) = entry.detail.clone() { " · {detail}" }
-                                        if let Some(reason) = entry.reason.clone() { " · Grund: {reason}" }
+                                        if let Some(detail) = entry.detail.clone() { ": {detail}" }
+                                        if let Some(reason) = entry.reason.clone() { " (Grund: {reason})" }
                                     }
                                 }
                                 span { class: "nv-faint nv-num", "{day_label(&entry.created_at)} {time_label(&entry.created_at)}" }

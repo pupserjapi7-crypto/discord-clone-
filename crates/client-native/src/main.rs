@@ -652,8 +652,16 @@ impl App {
             }
             Message::Submit => {
                 let handle = self.handle.trim().to_owned();
-                if handle.len() < 3 || self.password.len() < 8 {
-                    self.auth_error = Some("Handle (min. 3) und Passwort (min. 8) prüfen.".into());
+                // Der Server verlangt bei neuen Konten mindestens 10 Zeichen
+                // (`validate_password`); beim Anmelden reicht ein Passwort.
+                let min_password = if self.register { 10 } else { 1 };
+                if handle.len() < 3 || self.password.chars().count() < min_password {
+                    self.auth_error = Some(if self.register {
+                        "Der Benutzername braucht mindestens 3 Zeichen, das Passwort mindestens 10."
+                            .into()
+                    } else {
+                        "Gib deinen Benutzernamen und dein Passwort ein.".into()
+                    });
                     return Task::none();
                 }
                 if self.api.base() != self.server.trim().trim_end_matches('/') {
@@ -1928,11 +1936,11 @@ impl App {
     fn view_update_button(&self) -> Element<'_, Message> {
         let label = match &self.update {
             UpdateState::Checking => "Suche Updates…".to_owned(),
-            UpdateState::UpToDate => format!("v{} · aktuell", update::CURRENT),
+            UpdateState::UpToDate => format!("Version {} ist aktuell", update::CURRENT),
             UpdateState::Available(a) => format!("Update auf v{}", a.version),
             UpdateState::Installing(_) => "Wird installiert…".to_owned(),
             UpdateState::Idle | UpdateState::Failed(_) => {
-                format!("v{} · Nach Updates suchen", update::CURRENT)
+                format!("Version {} – nach Updates suchen", update::CURRENT)
             }
         };
         let message = match &self.update {
@@ -1971,13 +1979,13 @@ impl App {
             UpdateState::UpToDate => (
                 Icon::Refresh,
                 style::MUTED,
-                format!("v{} ist aktuell · erneut prüfen", update::CURRENT),
+                format!("Version {} ist aktuell. Erneut prüfen", update::CURRENT),
                 Some(Message::CheckUpdate),
             ),
             UpdateState::Idle | UpdateState::Failed(_) => (
                 Icon::Refresh,
                 style::MUTED,
-                format!("v{} · nach Updates suchen", update::CURRENT),
+                format!("Nach Updates suchen (Version {})", update::CURRENT),
                 Some(Message::CheckUpdate),
             ),
         };
@@ -2030,7 +2038,7 @@ impl App {
                     .style(style::input),
             ),
             field(
-                "Handle",
+                "Benutzername",
                 text_input("dein_name", &self.handle)
                     .on_input(Message::HandleChanged)
                     .on_submit(Message::Submit)
@@ -2039,12 +2047,19 @@ impl App {
             ),
             field(
                 "Passwort",
-                text_input("Mindestens 8 Zeichen", &self.password)
-                    .on_input(Message::PasswordChanged)
-                    .on_submit(Message::Submit)
-                    .secure(true)
-                    .padding(10)
-                    .style(style::input),
+                text_input(
+                    if self.register {
+                        "Mindestens 10 Zeichen"
+                    } else {
+                        "Passwort"
+                    },
+                    &self.password,
+                )
+                .on_input(Message::PasswordChanged)
+                .on_submit(Message::Submit)
+                .secure(true)
+                .padding(10)
+                .style(style::input),
             ),
         ]
         .spacing(14);
@@ -2081,13 +2096,7 @@ impl App {
                 .center_x(Fill),
             );
 
-        let footer = row![
-            text("Nativ · Rust").size(11).color(style::FAINT),
-            text("·").size(11).color(style::FAINT),
-            self.view_update_button(),
-        ]
-        .spacing(2)
-        .align_y(iced::Center);
+        let footer = self.view_update_button();
 
         container(
             column![
@@ -2455,7 +2464,7 @@ impl App {
                 )
             });
             card = card
-                .push(modal_label("ROLLEN"))
+                .push(modal_label("Rollen"))
                 .push(row(pills).spacing(6).wrap());
         }
 
@@ -2546,7 +2555,7 @@ impl App {
             || detail.can(perm::KICK_MEMBERS)
             || detail.can(perm::BAN_MEMBERS)
         {
-            card = card.push(modal_label("MODERATION")).push(moderation);
+            card = card.push(modal_label("Moderation")).push(moderation);
         }
         card.into()
     }
@@ -2610,7 +2619,7 @@ impl App {
                     .style(|theme, status| style::icon_button(theme, status, false)),
             ]
             .align_y(iced::Center),
-            modal_label("PROFIL"),
+            modal_label("Profil"),
             field(
                 "Anzeigename",
                 row![
@@ -2627,7 +2636,7 @@ impl App {
                 .spacing(8)
                 .align_y(iced::Center),
             ),
-            modal_label("SPRACHE"),
+            modal_label("Sprache"),
             field(
                 "Mikrofon",
                 choices(&self.devices.0, &self.prefs.input, Message::SetInput),
@@ -2790,7 +2799,7 @@ impl App {
         let mut channels = column![].spacing(2);
         if let Some(detail) = &self.detail {
             let manage = detail.can(perm::MANAGE_CHANNELS);
-            for (label, kind) in [("TEXTKANÄLE", 0), ("SPRACHKANÄLE", 1)] {
+            for (label, kind) in [("Textkanäle", 0), ("Sprachkanäle", 1)] {
                 let mut head =
                     row![container(section_label(label)).width(Fill)].align_y(iced::Center);
                 if manage {
@@ -3069,10 +3078,10 @@ impl App {
             } else if sharing && status.sharing {
                 let size = status
                     .share_size
-                    .map(|(w, h)| format!(" · {w}×{h}"))
+                    .map(|(w, h)| format!("{w}×{h}, "))
                     .unwrap_or_default();
                 text(format!(
-                    "Du teilst deinen Bildschirm{size} · {} fps",
+                    "Du teilst deinen Bildschirm ({size}{} fps)",
                     status.share_fps
                 ))
                 .color(style::ONLINE)
@@ -3205,7 +3214,7 @@ impl App {
         if here {
             body = body.push(
                 text(format!(
-                    "Pakete gesendet {} · empfangen {}",
+                    "{} Pakete gesendet, {} empfangen",
                     status.packets_out, status.packets_in
                 ))
                 .size(11)
@@ -3391,7 +3400,7 @@ impl App {
             top = top.push(text(err).size(12).color(style::DANGER));
         }
 
-        let mut list = column![section_label("UNTERHALTUNGEN")].spacing(2);
+        let mut list = column![section_label("Unterhaltungen")].spacing(2);
         if self.dms.is_empty() {
             list = list.push(
                 container(
@@ -3614,7 +3623,7 @@ impl App {
         let online = self.status == Status::Online;
         let placeholder = if online && channel.slowmode_secs > 0 {
             format!(
-                "Nachricht an #{} · Slowmode {} s",
+                "Nachricht an #{} (Slowmode: {} s)",
                 channel.name, channel.slowmode_secs
             )
         } else if online {
@@ -3755,7 +3764,7 @@ impl App {
                         .padding(8)
                         .style(style::input),
                     row![
-                        text("Enter speichert · Esc bricht ab")
+                        text("Enter speichert, Esc bricht ab")
                             .size(11)
                             .color(style::FAINT),
                         space().width(Fill),
@@ -3930,7 +3939,7 @@ impl App {
             return space().into();
         };
         let mut list = column![].spacing(2);
-        for (label, online) in [("ONLINE", true), ("OFFLINE", false)] {
+        for (label, online) in [("Online", true), ("Offline", false)] {
             let members: Vec<_> = detail
                 .members
                 .iter()
@@ -3939,7 +3948,7 @@ impl App {
             if members.is_empty() {
                 continue;
             }
-            list = list.push(section_label(format!("{label} — {}", members.len())));
+            list = list.push(section_count(label, members.len()));
             for member in members {
                 let dot = if online { style::ONLINE } else { style::FAINT };
                 let mut name = row![
@@ -3986,10 +3995,14 @@ impl App {
         }
         container(column![
             header_bar(
-                text(format!("Mitglieder · {}", detail.members.len()))
-                    .size(13)
-                    .font(style::SEMIBOLD)
-                    .color(style::MUTED)
+                row![
+                    text("Mitglieder")
+                        .size(13)
+                        .font(style::SEMIBOLD)
+                        .color(style::MUTED),
+                    text(detail.members.len()).size(13).color(style::FAINT),
+                ]
+                .spacing(6)
             ),
             scrollable(list.padding([0, 8])).height(Fill),
         ])
@@ -4034,7 +4047,7 @@ fn vline<'a>(height: impl Into<Length>) -> Element<'a, Message> {
 fn modal_label<'a>(label: &'a str) -> Element<'a, Message> {
     container(
         text(label)
-            .size(11)
+            .size(12)
             .font(style::SEMIBOLD)
             .color(style::FAINT),
     )
@@ -4045,12 +4058,34 @@ fn modal_label<'a>(label: &'a str) -> Element<'a, Message> {
     .into()
 }
 
+/// Abschnittsüberschrift in normaler Schreibweise (keine Versalien-Labels).
 fn section_label<'a>(label: impl text::IntoFragment<'a>) -> Element<'a, Message> {
     container(
         text(label)
-            .size(11)
+            .size(12)
             .font(style::SEMIBOLD)
             .color(style::FAINT),
+    )
+    .padding(iced::Padding {
+        top: 18.0,
+        right: 8.0,
+        bottom: 6.0,
+        left: 8.0,
+    })
+    .into()
+}
+
+/// Abschnitt mit Anzahl, z. B. „Online 2“: die Zahl leiser statt mit Gedankenstrich.
+fn section_count(label: &str, count: usize) -> Element<'_, Message> {
+    container(
+        row![
+            text(label)
+                .size(12)
+                .font(style::SEMIBOLD)
+                .color(style::FAINT),
+            text(count).size(12).color(style::FAINT),
+        ]
+        .spacing(6),
     )
     .padding(iced::Padding {
         top: 18.0,

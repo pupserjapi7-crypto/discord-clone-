@@ -40,7 +40,7 @@ fn friendly(status: u16, code: &str, message: &str) -> String {
             "Das Passwort braucht mindestens 10 Zeichen.".into()
         }
         (400, _) if message.contains("handle") => {
-            "Handle: 3–32 Zeichen, nur a–z, 0–9, Punkt und Unterstrich.".into()
+            "Der Benutzername braucht 3–32 Zeichen: a–z, 0–9, Punkt und Unterstrich.".into()
         }
         (500.., _) => "Der Server hat einen Fehler gemeldet. Bitte später erneut versuchen.".into(),
         _ if !message.is_empty() => message.to_owned(),

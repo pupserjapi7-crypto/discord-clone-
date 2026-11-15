@@ -17,7 +17,9 @@ pub fn AuthScreen() -> Element {
         let secret = password.read().clone();
         let registering = register();
         if name.len() < 3 {
-            error.set(Some("Der Handle braucht mindestens 3 Zeichen.".into()));
+            error.set(Some(
+                "Der Benutzername braucht mindestens 3 Zeichen.".into(),
+            ));
             return;
         }
         if registering && secret.chars().count() < 10 {
@@ -31,7 +33,7 @@ pub fn AuthScreen() -> Element {
                 Ok(user) => actions::finish_login(store, user).await,
                 Err(err) => {
                     let text = if !registering && err.contains("abgelaufen") {
-                        "Handle oder Passwort stimmt nicht.".to_string()
+                        "Benutzername oder Passwort stimmt nicht.".to_string()
                     } else {
                         err
                     };
@@ -68,7 +70,7 @@ pub fn AuthScreen() -> Element {
                 }
                 form { class: "nv-auth__panel", onsubmit: submit, novalidate: true,
                     div { class: "nv-field",
-                        label { class: "nv-field__label", r#for: "auth-handle", "Handle" }
+                        label { class: "nv-field__label", r#for: "auth-handle", "Benutzername" }
                         input {
                             id: "auth-handle",
                             class: "nv-input",
@@ -123,7 +125,6 @@ pub fn AuthScreen() -> Element {
                         if register() { "Anmelden" } else { "Konto erstellen" }
                     }
                 }
-                p { class: "nv-auth__foot", "Nova · komplett in Rust gebaut" }
             }
         }
     }

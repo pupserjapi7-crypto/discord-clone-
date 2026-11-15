@@ -135,6 +135,14 @@ Server-Release-Build waren vor den Änderungen **grün**.
   danach nach acht Runden kein Pixel verändert. Der erste Versuch (jede
   Mausaktion durch `update` schicken) half nicht und ist wieder entfernt.
 
+### Design-Durchgang nach „frontend-design“ (nach 0.6.0, noch nicht released)
+- Keine Versalien-Labels mehr (Textkanäle, Online, Profil …), Anzahlen leise
+  neben dem Label statt „ONLINE — 2“, keine „A · B“-Metazeilen.
+- Texte aus Nutzersicht: „Benutzername“ statt „Handle“, Hinweise als Sätze,
+  Technik-Fußzeilen („Nativ · Rust“) entfernt.
+- Nativer Client verlangte bei der Registrierung 8 Zeichen Passwort, der
+  Server 10: Hinweis und Prüfung angeglichen.
+
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
   Bann/Entbannen, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log – mit
