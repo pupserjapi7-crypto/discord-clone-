@@ -201,6 +201,30 @@ pub fn tag(color: Color) -> container::Style {
     }
 }
 
+/// Fläche hinter einem Stream (Letterbox schwarz).
+pub fn stage(_: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(Color::BLACK)),
+        border: Border {
+            radius: 0.0.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Leiste über dem Stream (Name, LIVE, Knöpfe).
+pub fn stage_bar(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: BORDER,
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..fill(RAISED)
+    }
+}
+
 /// Kleiner Ungelesen-Punkt bzw. Pille.
 pub fn unread_dot(_: &Theme) -> container::Style {
     container::Style {

@@ -591,12 +591,13 @@ impl Api {
         channel: i64,
         muted: bool,
         deafened: bool,
+        screen: bool,
     ) -> Result<(), String> {
         let _: serde_json::Value = self
             .request(
                 reqwest::Method::POST,
                 &format!("/api/v1/channels/{channel}/voice/state"),
-                Some(serde_json::json!({ "muted": muted, "deafened": deafened, "screen": false })),
+                Some(serde_json::json!({ "muted": muted, "deafened": deafened, "screen": screen })),
             )
             .await?;
         Ok(())
@@ -621,6 +622,9 @@ pub struct VoiceParticipant {
     pub muted: bool,
     #[serde(default)]
     pub deafened: bool,
+    /// Teilt gerade den Bildschirm.
+    #[serde(default)]
+    pub screen: bool,
 }
 
 // ---------------------------------------------------------------------------

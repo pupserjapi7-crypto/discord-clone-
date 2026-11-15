@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 15.11.2026 · **Version:** 0.4.2 (nativer Client vollständig, Linux-Build repariert)
+**Stand:** 15.11.2026 · **Version:** 0.5.0 (Streams im nativen Client)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
@@ -88,6 +88,20 @@ Server-Release-Build waren vor den Änderungen **grün**.
   Screenshot (Debug-Haken `NOVA_DEV_MODAL`, `NOVA_DEV_TOOLS`). Bearbeiten,
   Reagieren und Moderationsknöpfe nicht per Klick geprüft (die Testautomation
   liefert keine Mausbewegungen) – bitte kurz manuell prüfen.
+
+### Streams im nativen Client (0.5.0)
+- Bildschirm teilen (Windows: GDI, Linux: X11) mit H.264/OpenH264, 1080p30,
+  Videospur per Neuverhandlung über den DataChannel; Status „Du teilst …
+  · fps“, Abbruch mit Fehlermeldung (z. B. Wayland).
+- Streams ansehen: eigener Dekodier-Thread, Bühne mit Name/Auflösung,
+  Vollbild (Esc beendet), LIVE-Etikett in Kacheln und Kanalliste,
+  Schlüsselbild-Anforderung bei Lücken.
+- SFU: Video nur noch H.264 Constrained Baseline (siehe DECISIONS).
+- **Getestet** (15.11.2026, lokal): nativ → nativ (1080p, 30 fps), nativ →
+  Chromium (1080p, 31 fps dekodiert), Chromium → nativ (Canvas-Spur, da
+  `getDisplayMedia` im Testbrowser gesperrt). **Nicht getestet:** echtes
+  Teilen aus der Web-App, Linux/X11-Aufnahme auf echter Hardware,
+  Ende-zu-Ende-Latenz.
 
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,

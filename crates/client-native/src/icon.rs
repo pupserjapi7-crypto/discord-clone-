@@ -36,6 +36,9 @@ pub enum Icon {
     Thread,
     UserPlus,
     Archive,
+    Monitor,
+    Maximize,
+    Minimize,
 }
 
 struct Glyph {
@@ -397,6 +400,47 @@ impl<M> canvas::Program<M> for Glyph {
                     b.line_to(p(19.0, 14.0));
                     b.move_to(p(16.0, 11.0));
                     b.line_to(p(22.0, 11.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::Monitor => {
+                let path = Path::new(|b| {
+                    b.move_to(p(4.0, 3.0));
+                    b.line_to(p(20.0, 3.0));
+                    b.arc_to(p(22.0, 3.0), p(22.0, 5.0), 2.0 * scale);
+                    b.line_to(p(22.0, 15.0));
+                    b.arc_to(p(22.0, 17.0), p(20.0, 17.0), 2.0 * scale);
+                    b.line_to(p(4.0, 17.0));
+                    b.arc_to(p(2.0, 17.0), p(2.0, 15.0), 2.0 * scale);
+                    b.line_to(p(2.0, 5.0));
+                    b.arc_to(p(2.0, 3.0), p(4.0, 3.0), 2.0 * scale);
+                    b.move_to(p(8.0, 21.0));
+                    b.line_to(p(16.0, 21.0));
+                    b.move_to(p(12.0, 17.0));
+                    b.line_to(p(12.0, 21.0));
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::Maximize | Icon::Minimize => {
+                // Vier Ecken: nach außen (Vollbild) bzw. nach innen (verlassen).
+                let inward = self.icon == Icon::Minimize;
+                let path = Path::new(|b| {
+                    for (cx, cy, dx, dy) in [
+                        (3.0, 3.0, 1.0, 1.0),
+                        (21.0, 3.0, -1.0, 1.0),
+                        (3.0, 21.0, 1.0, -1.0),
+                        (21.0, 21.0, -1.0, -1.0),
+                    ] {
+                        let (x, y) = if inward {
+                            (cx + dx * 6.0, cy + dy * 6.0)
+                        } else {
+                            (cx, cy)
+                        };
+                        let (ex, ey) = if inward { (-dx, -dy) } else { (dx, dy) };
+                        b.move_to(p(x + ex * 5.0, y));
+                        b.line_to(p(x, y));
+                        b.line_to(p(x, y + ey * 5.0));
+                    }
                 });
                 frame.stroke(&path, stroke);
             }

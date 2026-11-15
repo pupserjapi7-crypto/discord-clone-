@@ -2605,7 +2605,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "echo-bot"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -3903,6 +3903,7 @@ dependencies = [
  "iced_runtime",
  "iced_widget",
  "iced_winit",
+ "image",
  "thiserror 2.0.21",
 ]
 
@@ -3962,6 +3963,8 @@ dependencies = [
  "half",
  "iced_core",
  "iced_futures",
+ "image",
+ "kamadak-exif",
  "log",
  "lyon_path",
  "raw-window-handle 0.6.2",
@@ -4431,6 +4434,15 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kamadak-exif"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8772c92c0f41c4a672cbdee6728253e5ae8fcc1c5eb5c6c676579565684bbf68"
+dependencies = [
+ "mutate_once",
 ]
 
 [[package]]
@@ -5122,6 +5134,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mutate_once"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
+
+[[package]]
 name = "naga"
 version = "27.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5145,6 +5163,15 @@ dependencies = [
  "spirv",
  "thiserror 2.0.21",
  "unicode-ident",
+]
+
+[[package]]
+name = "nasm-rs"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "706bf8a5e8c8ddb99128c3291d31bd21f4bcde17f0f4c20ec678d85c74faa149"
+dependencies = [
+ "log",
 ]
 
 [[package]]
@@ -5242,7 +5269,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 
 [[package]]
 name = "nova"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5275,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "nova-api"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -5300,7 +5327,7 @@ dependencies = [
 
 [[package]]
 name = "nova-common"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "bitflags 2.13.2",
@@ -5317,7 +5344,7 @@ dependencies = [
 
 [[package]]
 name = "nova-db"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5331,13 +5358,14 @@ dependencies = [
 
 [[package]]
 name = "nova-desktop"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "cpal",
  "futures-util",
  "iced",
  "nova-common",
+ "openh264",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
@@ -5346,11 +5374,13 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.26.2",
  "unsafe-libopus",
+ "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]
 name = "nova-gateway"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5369,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "nova-loadtest"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5384,7 +5414,7 @@ dependencies = [
 
 [[package]]
 name = "nova-sfu"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "nova-common",
@@ -5396,7 +5426,7 @@ dependencies = [
 
 [[package]]
 name = "nova-ui"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "dioxus",
  "futures-channel",
@@ -6011,6 +6041,27 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "openh264"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a30840cd2b2cd6ae39af2544f66adf55357f68e0e4938a096fe0e9f8f412b59"
+dependencies = [
+ "openh264-sys2",
+ "wide",
+]
+
+[[package]]
+name = "openh264-sys2"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8de206369120cab1be98e587adad1389e2ec00b63c62cdb3c13238000c1290a"
+dependencies = [
+ "cc",
+ "nasm-rs",
+ "walkdir",
+]
 
 [[package]]
 name = "openssl"
@@ -7393,6 +7444,15 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "safe_arch"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42c6efa15875e6ecb39ca61fb0b0c1a40b84fac5a5ffe71eef7d1000c8eb3f5f"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "same-file"
@@ -9893,6 +9953,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wide"
+version = "1.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
+dependencies = [
+ "bytemuck",
+ "safe_arch",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10744,7 +10814,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "anyhow",
 ]

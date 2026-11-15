@@ -327,7 +327,7 @@ impl Room {
             );
         }
 
-        let mut rtc = Rtc::builder().set_ice_lite(true).build(Instant::now());
+        let mut rtc = rtc_config().set_ice_lite(true).build(Instant::now());
         let candidate_addr = SocketAddr::new(public_ip, self.port);
         let candidate = Candidate::host(candidate_addr, "udp")
             .map_err(|err| VoiceError::InvalidOffer(err.to_string()))?;
@@ -577,6 +577,30 @@ struct TrackIn {
 
 /// Stream-ID ausgehender Spuren. Der Web-Client ordnet darüber Audio-/Video-
 /// Elemente Personen zu (Lautstärke, Sprecher-Ring, Kacheln).
+/// Payload-Typen und Profil für Video. Der native Client
+/// (`crates/client-native/src/voice.rs`) nutzt dieselben Werte.
+pub const H264_PT: u8 = 108;
+pub const H264_RTX_PT: u8 = 109;
+/// Constrained Baseline, Level 3.1 – das kann jeder Browser und OpenH264.
+pub const H264_PROFILE_LEVEL: u32 = 0x42e01f;
+
+/// Codecs des SFU: Opus für Sprache, für Video nur H.264 Constrained Baseline
+/// mit `packetization-mode=1`. Der SFU leitet RTP unverändert weiter; nur
+/// wenn alle Teilnehmer denselben Codec haben, kann jeder jeden Stream
+/// abspielen (Browser wie nativer Client mit OpenH264).
+fn rtc_config() -> str0m::RtcConfig {
+    let mut config = str0m::RtcConfig::new()
+        .clear_codecs()
+        .enable_opus(true, false);
+    config.codec_config().add_h264(
+        H264_PT.into(),
+        Some(H264_RTX_PT.into()),
+        true,
+        H264_PROFILE_LEVEL,
+    );
+    config
+}
+
 fn stream_id(user_id: i64) -> String {
     format!("u{user_id}")
 }
@@ -966,6 +990,21 @@ mod tests {
             status: 0,
             bot: false,
         }
+    }
+
+    #[test]
+    fn only_opus_and_constrained_baseline_h264() {
+        let mut config = rtc_config();
+        let codecs: Vec<_> = config
+            .codec_config()
+            .params()
+            .iter()
+            .map(|p| p.spec().codec)
+            .collect();
+        assert!(codecs.contains(&str0m::format::Codec::Opus));
+        assert!(codecs.contains(&str0m::format::Codec::H264));
+        assert!(!codecs.contains(&str0m::format::Codec::Vp8));
+        assert!(!codecs.contains(&str0m::format::Codec::Vp9));
     }
 
     #[test]

@@ -28,6 +28,8 @@ iced = { version = "0.14", default-features = false, features = [
   "x11",
   "wayland",
   "linux-theme-detection",
+  # Videobilder (Streams) als RGBA-Puffer; ohne PNG/JPEG-Decoder.
+  "image-without-codecs",
 ] }
 reqwest.workspace = true
 # Voice: dieselbe WebRTC-Bibliothek wie der SFU, Audio-I/O und Opus in Rust
@@ -35,11 +37,26 @@ reqwest.workspace = true
 str0m = "0.25"
 cpal = "0.18"
 unsafe-libopus = "0.2"
+# Streams: H.264 über Ciscos OpenH264 (C++, wird aus dem Quelltext gebaut).
+# Bewusste Ausnahme von „keine C-Toolchain“, siehe docs/DECISIONS.md.
+openh264 = "0.9"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+
+# Bildschirmaufnahme für Streams (src/capture.rs): GDI bzw. X11, beides ohne
+# zusätzliche C-Bibliotheken.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+x11rb = "0.13"
 
 [features]
 default = []

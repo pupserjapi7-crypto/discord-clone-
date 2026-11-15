@@ -10,6 +10,12 @@
 //!
 //! Gepuffert wird nur so viel wie nötig: Wiedergabe startet ab 40 ms pro
 //! Person, mehr als 200 ms werden verworfen (Latenz vor Lückenlosigkeit).
+//!
+//! Streams (Bildschirm teilen) laufen über dieselbe Verbindung, siehe
+//! `voice/stream.rs`: Aufnahme- und Kodier-Thread beim Senden, ein eigener
+//! Dekodier-Thread beim Empfangen (Audio stockt so nicht).
+
+mod stream;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -25,8 +31,8 @@ use std::{
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use str0m::{
-    Candidate, Event, IceConnectionState, Input, Output, Rtc,
-    change::{SdpAnswer, SdpOffer},
+    Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig,
+    change::{SdpAnswer, SdpOffer, SdpPendingOffer},
     channel::ChannelId,
     format::Codec,
     media::{Direction, Frequency, MediaKind, MediaTime, Mid},
@@ -34,6 +40,18 @@ use str0m::{
 };
 
 use crate::api::Api;
+pub use stream::Picture;
+use stream::{Pictures, Screen};
+
+/// Wie im SFU (`crates/voice-sfu`, `rtc_config`): Opus und H.264 Constrained
+/// Baseline mit `packetization-mode=1`, Payload-Typ 108 (RTX 109).
+fn rtc_config() -> RtcConfig {
+    let mut config = RtcConfig::new().clear_codecs().enable_opus(true, false);
+    config
+        .codec_config()
+        .add_h264(108.into(), Some(109.into()), true, 0x42e01f);
+    config
+}
 
 /// Opus arbeitet hier mit 48 kHz mono und 20-ms-Frames.
 const RATE: u32 = 48_000;
@@ -56,11 +74,21 @@ pub struct VoiceStatus {
     pub has_mic: bool,
     pub packets_in: u64,
     pub packets_out: u64,
+    /// Eigener Stream läuft (Videospur ausgehandelt, Bilder werden gesendet).
+    pub sharing: bool,
+    /// Größe des eigenen Streams.
+    pub share_size: Option<(usize, usize)>,
+    /// Gesendete Bilder pro Sekunde (eigener Stream).
+    pub share_fps: u32,
+    /// Fehler beim Teilen (Aufnahme, Wayland …); der Ton läuft weiter.
+    pub share_error: Option<String>,
 }
 
 enum Command {
     Muted(bool),
     Deafened(bool),
+    StartScreen,
+    StopScreen,
     Leave,
 }
 
@@ -69,6 +97,7 @@ pub struct VoiceHandle {
     pub channel_id: i64,
     commands: Sender<Command>,
     status: Arc<Mutex<VoiceStatus>>,
+    pictures: Pictures,
 }
 
 impl std::fmt::Debug for VoiceHandle {
@@ -90,6 +119,24 @@ impl VoiceHandle {
 
     pub fn set_deafened(&self, deafened: bool) {
         let _ = self.commands.send(Command::Deafened(deafened));
+    }
+
+    pub fn share_screen(&self, on: bool) {
+        let _ = self.commands.send(if on {
+            Command::StartScreen
+        } else {
+            Command::StopScreen
+        });
+    }
+
+    /// Letztes Bild des Streams einer Person (`None`: streamt nicht).
+    pub fn picture(&self, user_id: i64) -> Option<Picture> {
+        stream::picture(&self.pictures, user_id)
+    }
+
+    /// Wer gerade sichtbar streamt.
+    pub fn streamers(&self) -> Vec<i64> {
+        stream::streamers(&self.pictures)
     }
 }
 
@@ -133,7 +180,7 @@ pub async fn join(api: Api, channel_id: i64) -> Result<VoiceHandle, String> {
     let local = socket.local_addr().map_err(|err| err.to_string())?;
     let local = SocketAddr::new(ip, local.port());
 
-    let mut rtc = Rtc::builder().build(Instant::now());
+    let mut rtc = rtc_config().build(Instant::now());
     let candidate = Candidate::host(local, "udp").map_err(|err| format!("ICE-Kandidat: {err}"))?;
     rtc.add_local_candidate(candidate);
 
@@ -157,12 +204,15 @@ pub async fn join(api: Api, channel_id: i64) -> Result<VoiceHandle, String> {
         .map_err(|err| format!("Answer abgelehnt: {err}"))?;
 
     let status = Arc::new(Mutex::new(VoiceStatus::default()));
+    let pictures: Pictures = Arc::default();
     let (commands, rx) = mpsc::channel();
     let engine_status = Arc::clone(&status);
+    let engine_pictures = Arc::clone(&pictures);
     thread::Builder::new()
         .name("nova-voice".into())
         .spawn(move || {
             let mut engine = Engine::new(rtc, socket, local, mid, channel, engine_status);
+            engine.pictures = engine_pictures;
             engine.run(rx);
         })
         .map_err(|err| err.to_string())?;
@@ -171,6 +221,7 @@ pub async fn join(api: Api, channel_id: i64) -> Result<VoiceHandle, String> {
         channel_id,
         commands,
         status,
+        pictures,
     })
 }
 
@@ -511,6 +562,16 @@ struct Engine {
     my_loud: Option<Instant>,
     mic_buffer: Vec<f32>,
     rtp_time: u64,
+
+    /// Fremde Streams: H.264-Bilder gehen an den Dekodier-Thread.
+    pictures: Pictures,
+    decode_tx: Option<mpsc::SyncSender<(Mid, i64, Vec<u8>)>>,
+    keyframe_rx: Option<Receiver<Mid>>,
+    keyframe_asked: HashMap<Mid, Instant>,
+    /// Eigener Stream.
+    screen: Option<Screen>,
+    /// Eigenes, noch unbeantwortetes Offer (Videospur hinzufügen/entfernen).
+    pending: Option<SdpPendingOffer>,
 }
 
 impl Engine {
@@ -538,6 +599,12 @@ impl Engine {
             my_loud: None,
             mic_buffer: Vec::with_capacity(FRAME * 4),
             rtp_time: 0,
+            pictures: Arc::default(),
+            decode_tx: None,
+            keyframe_rx: None,
+            keyframe_asked: HashMap::new(),
+            screen: None,
+            pending: None,
         }
     }
 
@@ -564,7 +631,10 @@ impl Engine {
                     Ok(Command::Deafened(deafened)) => {
                         self.deafened.store(deafened, Ordering::Relaxed);
                     }
+                    Ok(Command::StartScreen) => self.start_screen(),
+                    Ok(Command::StopScreen) => self.stop_screen(),
                     Ok(Command::Leave) | Err(TryRecvError::Disconnected) => {
+                        self.stop_screen();
                         self.rtc.disconnect();
                         self.update_status(|s| s.ended = true);
                         return;
@@ -583,6 +653,9 @@ impl Engine {
                     self.send_frame(&frame);
                 }
             }
+
+            self.pump_screen();
+            self.pump_keyframe_requests();
 
             let timeout = match self.drive() {
                 Some(timeout) => timeout,
@@ -694,17 +767,21 @@ impl Engine {
                 _ => {}
             },
             Event::ChannelData(data) => {
-                // Der SFU verhandelt neue/entfernte Spuren über den DataChannel.
-                if let Ok(offer) = serde_json::from_slice::<SdpOffer>(&data.data)
-                    && let Ok(answer) = self.rtc.sdp_api().accept_offer(offer)
-                    && let Ok(json) = serde_json::to_string(&answer)
-                    && let Some(mut channel) = self.rtc.channel(self.channel)
-                {
-                    let _ = channel.write(false, json.as_bytes());
+                // Der SFU verhandelt neue/entfernte Spuren über den DataChannel;
+                // auf unser eigenes Offer (Stream) kommt dort die Answer.
+                if let Ok(offer) = serde_json::from_slice::<SdpOffer>(&data.data) {
+                    self.accept_remote_offer(offer);
+                } else if let Ok(answer) = serde_json::from_slice::<SdpAnswer>(&data.data) {
+                    self.accept_remote_answer(answer);
                 }
             }
+            Event::KeyframeRequest(request) => self.on_keyframe_request(request.mid),
             Event::MediaData(data) => {
                 if data.mid == self.mid {
+                    return;
+                }
+                if data.params.spec().codec == Codec::H264 {
+                    self.handle_video(data.mid, data.contiguous, &data.data);
                     return;
                 }
                 self.update_status(|s| s.packets_in += 1);

@@ -4,6 +4,26 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-15 — Streams: H.264 über OpenH264, SFU nur noch H.264 für Video
+
+**Entscheidung:** Der SFU bietet für Video nur noch H.264 Constrained
+Baseline (`42e01f`, `packetization-mode=1`, PT 108) an, Audio bleibt Opus.
+Der native Client kodiert und dekodiert H.264 mit Ciscos OpenH264
+(`openh264`-Crate, aus dem C++-Quelltext gebaut). Aufnahme unter Windows per
+GDI (`windows-sys`), unter Linux per X11 (`x11rb`); Wayland vorerst nicht.
+
+**Warum:** Der SFU leitet RTP unverändert weiter, also müssen alle
+Teilnehmer denselben Codec sprechen. Für VP8/H.264 gibt es keinen fertigen
+Echtzeit-Encoder in reinem Rust; AV1 (rav1e) wäre zu CPU-hungrig und in
+Safari kaum nutzbar. Jeder Browser spielt H.264 Constrained Baseline.
+OpenH264 baut mit dem vorhandenen mingw-`g++` bzw. MSVC – das ist die eine
+bewusste Ausnahme von „keine C-Toolchain“ (vom Auftraggeber so gewählt).
+
+**Gemessen (15.11.2026, lokal, Release):** 1920×1080 bei 30 fps; Aufnahme
+19 ms + Kodierung 15 ms pro Bild in getrennten Threads; Sender ~42 %,
+Zuschauer ~47 % eines Kerns. Nativ → Chromium: 1920×1080, 31 fps dekodiert.
+Chromium → nativ: dekodiert und angezeigt. Ende-zu-Ende-Latenz nicht gemessen.
+
 ## 2026-11-15 — Nativer Client zeichnet jedes Bild vollständig
 
 **Entscheidung:** `App::style` liefert pro Bild einen minimal anderen

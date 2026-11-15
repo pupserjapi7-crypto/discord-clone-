@@ -6,11 +6,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod capture;
 mod gateway;
 mod icon;
 mod prefs;
 mod style;
 mod update;
+mod video;
 mod voice;
 
 use std::collections::{HashMap, HashSet};
@@ -242,6 +244,14 @@ struct App {
     voice_muted: bool,
     voice_deafened: bool,
     voice_status: voice::VoiceStatus,
+    /// Eigener Stream angefordert (Knopf); der Status sagt, ob er läuft.
+    sharing: bool,
+    /// Wer im eigenen Sprachkanal gerade sichtbar streamt.
+    streamers: Vec<i64>,
+    /// Stream auf der Bühne (`None`: Kachelansicht).
+    stage: Option<i64>,
+    /// Bühne im ganzen Fenster.
+    theater: bool,
     /// Wer in welchem Sprachkanal ist.
     voice_rooms: HashMap<i64, Vec<api::VoiceParticipant>>,
     /// Ungewollt getrennt: so oft wird automatisch neu verbunden.
@@ -304,6 +314,9 @@ enum Message {
     LeaveVoice,
     ToggleMute,
     ToggleDeafen,
+    ToggleShare,
+    Watch(Option<i64>),
+    ToggleTheater,
     VoiceTick,
     VoiceRoom(i64, Result<Vec<api::VoiceParticipant>, String>),
     RetryVoice(i64),
@@ -382,6 +395,10 @@ impl App {
             voice_muted: false,
             voice_deafened: false,
             voice_status: voice::VoiceStatus::default(),
+            sharing: false,
+            streamers: Vec::new(),
+            stage: None,
+            theater: false,
             voice_rooms: HashMap::new(),
             voice_retries: 0,
             modal: None,
@@ -444,8 +461,14 @@ impl App {
         .map(Message::Gateway);
         let mut subs = vec![gateway, keyboard::listen().map(Message::Key)];
         if self.voice.is_some() {
-            // Sprecher-Ring und Verbindungsstatus fünfmal pro Sekunde abholen.
-            subs.push(iced::time::every(Duration::from_millis(200)).map(|_| Message::VoiceTick));
+            // Sprecher-Ring und Status fünfmal pro Sekunde; läuft ein Stream,
+            // so oft wie Bilder kommen (30 fps).
+            let every = if self.streamers.is_empty() {
+                Duration::from_millis(200)
+            } else {
+                Duration::from_millis(33)
+            };
+            subs.push(iced::time::every(every).map(|_| Message::VoiceTick));
         }
         if self.typing.values().any(|people| !people.is_empty()) {
             // Nur solange jemand tippt: abgelaufene Hinweise entfernen.
@@ -625,7 +648,7 @@ impl App {
                 }
                 if let Some(id) = target {
                     let open = self.update(Message::OpenChannel(id));
-                    return Task::batch([open, self.dev_modal()]);
+                    return Task::batch([open, self.dev_modal(), self.dev_voice()]);
                 }
                 self.channel = None;
             }
@@ -783,6 +806,13 @@ impl App {
                 match result {
                     Ok(handle) => {
                         self.voice = Some(handle);
+                        // Nur Debug-Builds: `NOVA_DEV_SHARE=1` teilt sofort.
+                        if dev_flag("NOVA_DEV_SHARE") && !self.sharing {
+                            return Task::batch([
+                                self.load_room(channel_id),
+                                Task::done(Message::ToggleShare),
+                            ]);
+                        }
                         // Push-to-Talk: stumm, bis die Taste gedrückt wird.
                         let state = self.push_voice_state();
                         return Task::batch([state, self.load_room(channel_id)]);
@@ -806,9 +836,44 @@ impl App {
                 }
                 return self.push_voice_state();
             }
+            Message::ToggleShare => {
+                let Some(handle) = &self.voice else {
+                    return Task::none();
+                };
+                self.sharing = !self.sharing;
+                handle.share_screen(self.sharing);
+                return self.push_voice_state();
+            }
+            Message::Watch(user) => {
+                self.stage = user;
+                if user.is_none() {
+                    self.theater = false;
+                }
+            }
+            Message::ToggleTheater => {
+                self.theater = !self.theater && self.stage.is_some();
+            }
             Message::VoiceTick => {
                 if let Some(handle) = &self.voice {
                     let status = handle.status();
+                    // Teilen ist gescheitert (Aufnahme, Wayland …): Knopf
+                    // zurücksetzen und den Grund zeigen.
+                    if self.sharing && !status.sharing && status.share_error.is_some() {
+                        self.sharing = false;
+                        self.error = status.share_error.clone();
+                        handle.share_screen(false);
+                        self.voice_status = status;
+                        return self.push_voice_state();
+                    }
+                    self.streamers = handle.streamers();
+                    // Nur Debug-Builds: `NOVA_DEV_WATCH=1` schaut den ersten Stream an.
+                    if self.stage.is_none() && dev_flag("NOVA_DEV_WATCH") {
+                        self.stage = self.streamers.first().copied();
+                    }
+                    if self.stage.is_some_and(|id| !self.streamers.contains(&id)) {
+                        self.stage = None;
+                        self.theater = false;
+                    }
                     if status.ended {
                         let channel_id = handle.channel_id;
                         let leave = self.leave_voice();
@@ -1161,6 +1226,10 @@ impl App {
         let channel_id = handle.channel_id;
         drop(handle);
         self.voice_status = voice::VoiceStatus::default();
+        self.sharing = false;
+        self.streamers.clear();
+        self.stage = None;
+        self.theater = false;
         let api = self.api.clone();
         Task::perform(async move { api.voice_leave(channel_id).await }, |_| {
             Message::Ignore
@@ -1174,10 +1243,14 @@ impl App {
         handle.set_muted(self.effective_mute());
         handle.set_deafened(self.voice_deafened);
         let api = self.api.clone();
-        let (channel_id, muted, deafened) =
-            (handle.channel_id, self.voice_muted, self.voice_deafened);
+        let (channel_id, muted, deafened, screen) = (
+            handle.channel_id,
+            self.voice_muted,
+            self.voice_deafened,
+            self.sharing,
+        );
         Task::perform(
-            async move { api.voice_state(channel_id, muted, deafened).await },
+            async move { api.voice_state(channel_id, muted, deafened, screen).await },
             |_| Message::Ignore,
         )
     }
@@ -1219,6 +1292,26 @@ impl App {
         Task::perform(tokio::time::sleep(Duration::from_millis(600)), move |()| {
             Message::OpenModal(modal.clone())
         })
+    }
+
+    /// Nur Debug-Builds: `NOVA_DEV_VOICE=1` öffnet den ersten Sprachkanal und
+    /// tritt bei (für Stream-Tests ohne Klicks).
+    fn dev_voice(&self) -> Task<Message> {
+        if !dev_flag("NOVA_DEV_VOICE") || self.voice.is_some() {
+            return Task::none();
+        }
+        let Some(id) = self
+            .detail
+            .as_ref()
+            .and_then(|d| d.channels.iter().find(|c| c.kind == 1))
+            .map(|c| c.id)
+        else {
+            return Task::none();
+        };
+        Task::batch([
+            Task::done(Message::OpenChannel(id)),
+            Task::done(Message::JoinVoice(id)),
+        ])
     }
 
     fn save_prefs(&self) {
@@ -1326,6 +1419,10 @@ impl App {
                     return self.push_voice_state();
                 }
                 if key == keyboard::Key::Named(keyboard::key::Named::Escape) {
+                    if self.theater {
+                        self.theater = false;
+                        return Task::none();
+                    }
                     if self.modal.is_some() {
                         return self.update(Message::CloseModal);
                     }
@@ -1801,6 +1898,15 @@ impl App {
     }
 
     fn view_chat(&self) -> Element<'_, Message> {
+        if self.theater
+            && let Some(stage) = self.view_stage(true)
+        {
+            return container(stage)
+                .width(Fill)
+                .height(Fill)
+                .style(style::stage)
+                .into();
+        }
         let mut layout = row![self.view_rail(), self.view_sidebar(), self.view_main()];
         if self.show_members && self.detail.is_some() {
             layout = layout.push(vline(Fill)).push(self.view_members());
@@ -2445,6 +2551,7 @@ impl App {
                                     text(person.display_name.clone())
                                         .size(13)
                                         .color(style::MUTED),
+                                    live_tag(person.screen),
                                 ]
                                 .spacing(8)
                                 .padding([2, 8])
@@ -2623,16 +2730,44 @@ impl App {
             .cloned()
             .unwrap_or_default();
 
+        let stage = if here { self.view_stage(false) } else { None };
+        // Mit Bühne werden die Kacheln klein und stehen darunter.
+        let (tile_w, tile_h, face) = if stage.is_some() {
+            (150.0, 96.0, 40.0)
+        } else {
+            (180.0, 132.0, 64.0)
+        };
+        let me_id = self.me_id();
         let tiles = people.into_iter().map(|person| {
             let talking = here && speaking.contains(&person.user_id);
             let muted = person.muted || person.deafened;
+            let mine = person.user_id == me_id;
+            let picture = self
+                .voice
+                .as_ref()
+                .filter(|_| here)
+                .and_then(|v| v.picture(person.user_id));
+            let live = picture.is_some() || person.screen || (mine && self.sharing);
             let mut name_row = row![
                 text(person.display_name.clone())
                     .size(13)
                     .color(style::TEXT)
+                    .wrapping(text::Wrapping::None)
             ]
             .spacing(6)
             .align_y(iced::Center);
+            if live {
+                name_row = name_row.push(
+                    container(
+                        text("LIVE")
+                            .size(9)
+                            .font(style::SEMIBOLD)
+                            .color(style::ON_ACCENT),
+                    )
+                    .padding([1, 4])
+                    .style(|_: &Theme| style::tag(style::DANGER)),
+                );
+            }
             if muted {
                 name_row = name_row.push(icon(
                     if person.deafened {
@@ -2644,23 +2779,71 @@ impl App {
                     style::DANGER,
                 ));
             }
-            container(
-                column![avatar(&person.display_name, 64.0), name_row]
-                    .spacing(10)
-                    .align_x(iced::Center),
-            )
-            .center_x(180)
-            .center_y(132)
-            .style(move |_: &Theme| style::voice_tile(talking))
-            .into()
-        });
-        let grid = iced::widget::row(tiles).spacing(12).wrap();
-
-        let controls: Element<'_, Message> = if here {
-            let state = if status.connected {
-                text("Verbunden").color(style::ONLINE)
+            // Wer streamt, zeigt sein Bild statt des Avatars.
+            let face: Element<'a, Message> = match &picture {
+                Some(picture) => iced::widget::image(picture.handle.clone())
+                    .content_fit(iced::ContentFit::Cover)
+                    .width(Fill)
+                    .height(Fill)
+                    .into(),
+                None => avatar(&person.display_name, face),
+            };
+            let content: Element<'a, Message> = if picture.is_some() {
+                column![container(face).height(Fill).width(Fill), name_row]
+                    .spacing(6)
+                    .padding(6)
+                    .align_x(iced::Center)
+                    .into()
             } else {
+                column![face, name_row]
+                    .spacing(10)
+                    .align_x(iced::Center)
+                    .into()
+            };
+            let tile = container(content)
+                .center_x(tile_w)
+                .center_y(tile_h)
+                .style(move |_: &Theme| style::voice_tile(talking));
+            if picture.is_some() {
+                let user = person.user_id;
+                tip(
+                    button(tile)
+                        .padding(0)
+                        .on_press(Message::Watch(Some(user)))
+                        .style(|theme, status| style::channel_button(theme, status, false)),
+                    "Ansehen",
+                    tooltip::Position::Top,
+                )
+            } else {
+                tile.into()
+            }
+        });
+        let tiles_row = iced::widget::row(tiles).spacing(12);
+        // Unter der Bühne eine Reihe (waagrecht scrollbar), sonst umbrechen.
+        let grid: Element<'a, Message> = if stage.is_some() {
+            tiles_row.into()
+        } else {
+            tiles_row.wrap().into()
+        };
+
+        let sharing = self.sharing;
+        let controls: Element<'_, Message> = if here {
+            let state = if !status.connected {
                 text("Verbinde …").color(style::WARN)
+            } else if sharing && status.sharing {
+                let size = status
+                    .share_size
+                    .map(|(w, h)| format!(" · {w}×{h}"))
+                    .unwrap_or_default();
+                text(format!(
+                    "Du teilst deinen Bildschirm{size} · {} fps",
+                    status.share_fps
+                ))
+                .color(style::ONLINE)
+            } else if sharing {
+                text("Bildschirm wird vorbereitet …").color(style::WARN)
+            } else {
+                text("Verbunden").color(style::ONLINE)
             };
             let mic_on = !self.voice_muted;
             let ears_on = !self.voice_deafened;
@@ -2700,6 +2883,26 @@ impl App {
                         "Taub schalten"
                     } else {
                         "Ton einschalten"
+                    },
+                    tooltip::Position::Top,
+                ),
+                tip(
+                    button(icon(
+                        Icon::Monitor,
+                        20.0,
+                        if self.sharing {
+                            style::ACCENT
+                        } else {
+                            style::TEXT
+                        }
+                    ))
+                    .padding(10)
+                    .on_press(Message::ToggleShare)
+                    .style(move |theme, status| style::icon_button(theme, status, sharing)),
+                    if self.sharing {
+                        "Teilen beenden"
+                    } else {
+                        "Bildschirm teilen"
                     },
                     tooltip::Position::Top,
                 ),
@@ -2748,6 +2951,17 @@ impl App {
                     .color(style::MUTED),
             );
         }
+        let someone_live = self
+            .voice_rooms
+            .get(&channel.id)
+            .is_some_and(|people| people.iter().any(|p| p.screen));
+        if !here && someone_live {
+            body = body.push(
+                text("Hier wird gestreamt – tritt bei, um zuzusehen.")
+                    .size(13)
+                    .color(style::MUTED),
+            );
+        }
         body = body.push(grid);
         if here && let Some(warning) = &status.error {
             body = body.push(text(warning.clone()).size(13).color(style::WARN));
@@ -2762,8 +2976,30 @@ impl App {
                 .color(style::FAINT),
             );
         }
+        let main: Element<'a, Message> = match stage {
+            // Bühne oben, Kacheln klein darunter.
+            Some(stage) => column![
+                container(stage)
+                    .width(Fill)
+                    .height(Fill)
+                    .padding(iced::Padding {
+                        top: 16.0,
+                        right: 16.0,
+                        bottom: 0.0,
+                        left: 16.0,
+                    }),
+                scrollable(body)
+                    .direction(scrollable::Direction::Horizontal(
+                        scrollable::Scrollbar::new().width(4).scroller_width(4),
+                    ))
+                    .height(Length::Shrink),
+            ]
+            .height(Fill)
+            .into(),
+            None => scrollable(body).height(Fill).into(),
+        };
         column![
-            scrollable(body).height(Fill),
+            main,
             container(controls)
                 .padding([12, 24])
                 .width(Fill)
@@ -2771,6 +3007,75 @@ impl App {
         ]
         .height(Fill)
         .into()
+    }
+
+    /// Angeschauter Stream mit Name, Auflösung und Knöpfen. `None`, solange
+    /// kein Stream ausgewählt ist oder noch kein Bild da ist.
+    fn view_stage(&self, theater: bool) -> Option<Element<'_, Message>> {
+        let user = self.stage?;
+        let picture = self.voice.as_ref()?.picture(user)?;
+        let name = self
+            .voice_rooms
+            .values()
+            .flatten()
+            .find(|p| p.user_id == user)
+            .map(|p| p.display_name.clone())
+            .unwrap_or_default();
+        let tool = |glyph: Icon, label: &'static str, msg: Message| -> Element<'_, Message> {
+            tip(
+                button(icon_hover(glyph, 18.0, style::TEXT, style::ACCENT))
+                    .padding(8)
+                    .on_press(msg)
+                    .style(|theme, status| style::icon_button(theme, status, false)),
+                label,
+                tooltip::Position::Bottom,
+            )
+        };
+        let bar = container(
+            row![
+                container(
+                    text("LIVE")
+                        .size(10)
+                        .font(style::SEMIBOLD)
+                        .color(style::ON_ACCENT),
+                )
+                .padding([2, 6])
+                .style(|_: &Theme| style::tag(style::DANGER)),
+                text(name).size(14).font(style::SEMIBOLD).color(style::TEXT),
+                text(format!("{}×{}", picture.width, picture.height))
+                    .size(12)
+                    .color(style::MUTED),
+                space().width(Fill),
+                tool(
+                    if theater {
+                        Icon::Minimize
+                    } else {
+                        Icon::Maximize
+                    },
+                    if theater {
+                        "Vollbild verlassen (Esc)"
+                    } else {
+                        "Vollbild"
+                    },
+                    Message::ToggleTheater,
+                ),
+                tool(Icon::Close, "Nicht mehr ansehen", Message::Watch(None)),
+            ]
+            .spacing(10)
+            .align_y(iced::Center),
+        )
+        .padding([6, 10])
+        .style(style::stage_bar);
+        let video = container(
+            iced::widget::image(picture.handle)
+                .content_fit(iced::ContentFit::Contain)
+                .width(Fill)
+                .height(Fill),
+        )
+        .width(Fill)
+        .height(Fill)
+        .style(style::stage);
+        Some(column![bar, video].into())
     }
 
     fn view_main(&self) -> Element<'_, Message> {
@@ -3397,6 +3702,27 @@ fn channel_slug(raw: &str, voice: bool) -> String {
     } else {
         cleaned.to_lowercase()
     }
+}
+
+/// Debug-Schalter für Tests ohne Klicks; in Release-Builds immer aus.
+fn dev_flag(name: &str) -> bool {
+    cfg!(debug_assertions) && std::env::var_os(name).is_some()
+}
+
+/// Rotes „LIVE“ für Streamende; leer, wenn nicht.
+fn live_tag<'a>(live: bool) -> Element<'a, Message> {
+    if !live {
+        return space().width(0).into();
+    }
+    container(
+        text("LIVE")
+            .size(9)
+            .font(style::SEMIBOLD)
+            .color(style::ON_ACCENT),
+    )
+    .padding([1, 4])
+    .style(|_: &Theme| style::tag(style::DANGER))
+    .into()
 }
 
 fn initials(name: &str) -> String {

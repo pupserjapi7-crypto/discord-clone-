@@ -20,6 +20,15 @@ description: Arbeit am Voice- und Screenshare-Pfad von Project Nova – str0m-SF
   ordnet darüber Audio-/Video-Elemente Personen zu (Lautstärke, Sprecher-Ring).
 - **Limits**: `NOVA_SFU_MAX_USERS` pro Raum; höchstens 8 gleichzeitige
   Videospuren (Screenshare) pro Raum (`MAX_VIDEO_TRACKS`).
+- **Codecs**: `rtc_config()` im SFU erlaubt nur Opus und H.264 Constrained
+  Baseline (PT 108, `42e01f`, `packetization-mode=1`). Der native Client nutzt
+  dieselbe Konfiguration (`crates/client-native/src/voice.rs`) und OpenH264
+  (`src/video.rs`). Neue Codecs nur, wenn wirklich jeder Client sie kann –
+  der SFU transkodiert nicht.
+- **Nativer Stream**: `voice/stream.rs` – Aufnahme- und Kodier-Thread,
+  Dekodier-Thread, Videospur per eigenem Offer über den DataChannel. Testen
+  ohne Klicks mit Debug-Build: `NOVA_DEV_VOICE=1` (+ `NOVA_DEV_SHARE=1` bzw.
+  `NOVA_DEV_WATCH=1`).
 - **Simulcast**: nur die hohe Schicht (`rid = "h"`) wird weitergeleitet, siehe
   `docs/DECISIONS.md`.
 
