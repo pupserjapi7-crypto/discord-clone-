@@ -43,7 +43,9 @@ use nova_common::protocol::{
 };
 use tokio::net::TcpStream;
 use tokio::time::{Instant as TokioInstant, MissedTickBehavior};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    MaybeTlsStream, WebSocketStream, connect_async_with_config, tungstenite::Message,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Mode {
@@ -368,7 +370,10 @@ async fn connect_client(args: &Args, token: &str, resume: Option<(String, u32)>)
 }
 
 async fn connect_once(args: &Args, token: &str, resume: Option<(String, u32)>) -> Result<Conn> {
-    let (ws, _) = connect_async(&args.ws).await.context("websocket connect")?;
+    // Wie Browser: TCP_NODELAY, sonst misst der Test Nagle statt des Servers.
+    let (ws, _) = connect_async_with_config(&args.ws, None, true)
+        .await
+        .context("websocket connect")?;
     let (mut sink, mut stream) = ws.split();
     let hello = protocol::encode(
         OP_HELLO,

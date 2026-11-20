@@ -2,6 +2,21 @@
 
 Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erfahrenen Rust-Entwickler** inklusive Tests und Doku. Jeder Meilenstein endet mit Code, Tests, Messung und kurzem Entscheidungsprotokoll. Kein Meilenstein beginnt, bevor der vorherige sein Gate bestanden hat.
 
+## Messwerte v0.8.0 (20.11.2026, lokal, Linux-Container mit 4 Kernen, Release-Build)
+
+| Budget | Ziel | Gemessen |
+|---|---|---|
+| Server-RAM Leerlauf | < 150 MB | **22,6 MB** RSS nach 10 s |
+| Server-RAM mit 120 WS + 20 msg/s | – | 59,8 MB |
+| Gateway-Dispatch p99 | ≤ 5 ms | **2,1 ms** (p50 0,09 ms), 120 Clients, 30.000 Events bei 100 Empfängern, 0 Lücken |
+| Nachrichten-Pipeline (inkl. DB) | – | p50 6,3 ms, p99 12,9 ms |
+| Ack-Rundreise beim Sender | – | p50 8,1 ms, p99 13,4 ms (vor `TCP_NODELAY`: 42,5 / 50,4 ms) |
+| WASM gzip | < 2 MB | **605 KB** (roh 1,56 MB) |
+| Nativer Client | – | 26 MB RAM, erste Ansicht 13 ms, Gateway online 31 ms (Xvfb) |
+
+Werte vom Windows-Rechner (v0.4.0) und vom VPS sind mit diesen nicht direkt
+vergleichbar (andere Maschine).
+
 ## Messwerte Voice v0.8.0 (20.11.2026, lokal, Linux-Container mit 4 Kernen, Release-Build)
 
 | Budget | Ziel | Gemessen |

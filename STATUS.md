@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 20.11.2026 · **Version:** 0.8.0 (Uploads)
+**Stand:** 20.11.2026 · **Version:** 0.8.0 (Uploads, Foren, Ungelesen pro Server, Voice-Messung)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
@@ -385,8 +385,18 @@ Server-Release-Build waren vor den Änderungen **grün**.
 
 ### Messwerte
 
-Siehe `docs/03-roadmap.md`: Dispatch-p99 0,98 ms, Server-RAM 11,5 MB Leerlauf,
-WASM 501 KB gzip.
+Siehe `docs/03-roadmap.md` (v0.8.0, Linux, Release): Dispatch-p99 2,1 ms bei
+120 Verbindungen, Server-RAM 22,6 MB Leerlauf, WASM 605 KB gzip, SFU p99
+0,67 ms, 30 Personen Voice 92 MB, Web ↔ Web ohne Geräte 40–56 ms.
+
+### Release-Check 0.8.0 (20.11.2026)
+- `cargo xtask check` grün (fmt, Clippy Workspace + WASM, alle Tests inkl.
+  12 Integrationstests), UI-Build aktuell, Migrationen 1–6 frisch und als
+  Update, Smoke-Test im Browser gegen den Release-Build.
+- **Gefunden:** Der Server setzte kein `TCP_NODELAY`; kleine Gateway-Frames
+  warteten auf das verzögerte TCP-ACK des Clients (Linux 40 ms, Windows bis
+  200 ms). Jetzt gesetzt: Ack-Rundreise p50 42 → 8 ms. Der Lasttest setzt es
+  wie Browser auch auf seiner Seite.
 
 ---
 

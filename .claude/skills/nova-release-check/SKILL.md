@@ -21,7 +21,14 @@ Reihenfolge einhalten; bei Rot zuerst beheben.
    - Server-RAM im Leerlauf (`nova serve` lokal, RSS/Working Set nach 10 s)
    - Gateway-Dispatch p99 (`/metrics` oder `cargo run -p nova-loadtest`)
    - nativer Client: RAM und „erste Ansicht“ aus stderr
-   Budgets: Server Leerlauf < 150 MB, WASM gzip < 2 MB, Dispatch p99 ≤ 5 ms.
+   - Voice: `nova seed --users 30`, Server mit `NOVA_VOICE_MAX_USERS=30`, dann
+     `nova-loadtest --mode voice --users 30 --guild <id> --server-pid <pid>`
+     (Verlust, Laufzeit durch den SFU, CPU/RAM; dazu `nova_sfu_forward_*`)
+   Budgets: Server Leerlauf < 150 MB, WASM gzip < 2 MB, Dispatch p99 ≤ 5 ms,
+   SFU-Weiterleitung p99 < 5 ms, Voice-Verlust 0 %, 30 Personen < 900 MB.
+   Nur **Release-Builds** messen und **nicht während eines Builds** (belegte
+   Kerne verfälschen Latenzen um ein Vielfaches). `/metrics` antwortet nur
+   lokal. `--fetch-metrics` ist ein Schalter ohne Wert.
 5. **`nova serve` startet** und die App ist benutzbar (Login, Kanal, Nachricht).
 6. **Doku**: `STATUS.md` (was geht, was nicht, Messwerte), README-Statustabelle,
    neue Entscheidungen in `docs/DECISIONS.md`, Betriebsänderungen in
