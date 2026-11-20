@@ -5,7 +5,7 @@ use serde_json::json;
 
 use crate::{
     actions, api,
-    components::{Icon, Kbd, Modal, classes, day_label, time_label},
+    components::{Icon, Kbd, Modal, Skeleton, classes, day_label, time_label},
     store::{ServerTab, SettingsTab, use_store},
     types::*,
 };
@@ -197,6 +197,90 @@ fn VoiceTab() -> Element {
                 }
             }
         }
+        VideoSection {}
+    }
+}
+
+/// Bildschirm teilen, Kamera und Empfangsqualität.
+#[component]
+fn VideoSection() -> Element {
+    let mut store = use_store();
+    let cameras = use_resource(crate::voice::camera_devices);
+    let settings = store.settings.read().clone();
+    rsx! {
+        section { class: "nv-section",
+            h3 { "Bildschirm teilen" }
+            div { class: "nv-field",
+                label { class: "nv-field__label", r#for: "screen-quality", "Qualität" }
+                select {
+                    id: "screen-quality",
+                    class: "nv-select",
+                    onchange: move |event| {
+                        if let Some(quality) = ScreenQuality::ALL.into_iter().find(|q| q.key() == event.value()) {
+                            store.settings.write().screen_quality = quality;
+                            save_settings(store);
+                        }
+                    },
+                    for quality in ScreenQuality::ALL {
+                        option { key: "{quality.key()}", value: "{quality.key()}", selected: settings.screen_quality == quality, "{quality.label()}" }
+                    }
+                }
+                span { class: "nv-field__hint", "Gilt ab der nächsten Freigabe. Andere bekommen je nach Ansicht automatisch eine kleinere Stufe." }
+            }
+            label { class: "nv-check",
+                input {
+                    r#type: "checkbox",
+                    checked: settings.screen_audio,
+                    onchange: move |event| {
+                        store.settings.write().screen_audio = event.checked();
+                        save_settings(store);
+                    },
+                }
+                span { class: "nv-check__text",
+                    span { "Ton mitsenden" }
+                    span { class: "nv-check__hint", "Ton eines Tabs, unter Windows auch der Systemton – sofern der Browser es anbietet." }
+                }
+            }
+        }
+        section { class: "nv-section",
+            h3 { "Kamera" }
+            div { class: "nv-field",
+                label { class: "nv-field__label", r#for: "camera-device", "Gerät" }
+                select {
+                    id: "camera-device",
+                    class: "nv-select",
+                    onchange: move |event| {
+                        let value = event.value();
+                        store.settings.write().camera_device = (!value.is_empty()).then_some(value);
+                        save_settings(store);
+                    },
+                    option { value: "", selected: settings.camera_device.is_none(), "Systemstandard" }
+                    if let Some(list) = cameras.read().as_ref() {
+                        for (id, label) in list.clone() {
+                            option { key: "{id}", value: "{id}", selected: settings.camera_device.as_deref() == Some(id.as_str()), "{label}" }
+                        }
+                    }
+                }
+            }
+            div { class: "nv-field",
+                label { class: "nv-field__label", r#for: "receive-quality", "Empfang von Bildschirmen und Kameras" }
+                select {
+                    id: "receive-quality",
+                    class: "nv-select",
+                    onchange: move |event| {
+                        if let Some(quality) = ReceiveQuality::ALL.into_iter().find(|q| q.key() == event.value()) {
+                            store.settings.write().receive_quality = quality;
+                            save_settings(store);
+                            crate::voice::apply_layers(store);
+                        }
+                    },
+                    for quality in ReceiveQuality::ALL {
+                        option { key: "{quality.key()}", value: "{quality.key()}", selected: settings.receive_quality == quality, "{quality.label()}" }
+                    }
+                }
+                span { class: "nv-field__hint", "„Datensparend“ holt kleinere Bilder, gut für mobile Daten." }
+            }
+        }
     }
 }
 
@@ -375,21 +459,43 @@ const SLOWMODES: [(i32, &str); 8] = [
     (3600, "1 Std."),
 ];
 
+fn channel_icon(kind: i16) -> &'static str {
+    match kind {
+        KIND_VOICE => "volume",
+        KIND_FORUM => "forum",
+        _ => "hash",
+    }
+}
+
+fn channel_kind_label(kind: i16) -> &'static str {
+    match kind {
+        KIND_VOICE => "Sprachkanal",
+        KIND_FORUM => "Forum",
+        _ => "Textkanal",
+    }
+}
+
 #[component]
 fn ChannelsTab() -> Element {
     let store = use_store();
+    let mut selected = use_signal(|| Option::<String>::None);
     let detail = store.detail.read().clone().unwrap_or_default();
     let can = detail.can(perm::MANAGE_CHANNELS);
-    let channels: Vec<Channel> = detail
+    let can_edit = (detail.can(perm::MANAGE_ROLES) && can) || detail.can(perm::MANAGE_WEBHOOKS);
+    if let Some(channel) = selected().and_then(|id| detail.channel(&id).cloned()) {
+        return rsx! { ChannelDetail { channel, onback: move |_| selected.set(None) } };
+    }
+    let mut channels: Vec<Channel> = detail
         .channels
         .iter()
-        .filter(|c| c.kind == KIND_TEXT)
+        .filter(|c| c.kind != KIND_THREAD)
         .cloned()
         .collect();
+    channels.sort_by_key(|c| (c.kind == KIND_VOICE, c.position));
     rsx! {
         section { class: "nv-section",
-            h3 { "Textkanäle" }
-            p { class: "nv-muted", "Slowmode begrenzt, wie oft jemand schreiben darf. Moderation ist ausgenommen." }
+            h3 { "Kanäle" }
+            p { class: "nv-muted", "Slowmode begrenzt, wie oft jemand schreiben darf (Moderation ist ausgenommen). „Bearbeiten“ öffnet Berechtigungen und Webhooks." }
             if !can {
                 p { class: "nv-faint", "Zum Ändern brauchst du „Kanäle verwalten“." }
             }
@@ -397,40 +503,457 @@ fn ChannelsTab() -> Element {
                 for channel in channels {
                     {
                         let id = channel.id.clone();
+                        let open_id = channel.id.clone();
+                        let has_slowmode = channel.kind != KIND_VOICE;
                         rsx! {
                             div { key: "{channel.id}", class: "nv-list__item",
-                                Icon { name: "hash", size: 16 }
+                                Icon { name: channel_icon(channel.kind), size: 16 }
                                 div { class: "nv-list__main",
                                     div { class: "nv-list__title", "{channel.name}" }
-                                    div { class: "nv-list__sub", "{channel.topic.clone().unwrap_or_default()}" }
+                                    div { class: "nv-list__sub",
+                                        "{channel.topic.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| channel_kind_label(channel.kind).to_owned())}"
+                                    }
                                 }
-                                label { class: "sr-only", r#for: "slow-{channel.id}", "Slowmode für {channel.name}" }
-                                select {
-                                    id: "slow-{channel.id}",
-                                    class: "nv-select",
-                                    style: "width: 120px; min-height: 36px",
-                                    disabled: !can,
-                                    onchange: move |event| {
-                                        let secs: i32 = event.value().parse().unwrap_or(0);
-                                        let id = id.clone();
-                                        spawn_forever(async move {
-                                            match api::update_channel(&id, json!({ "slowmode_secs": secs })).await {
-                                                Ok(_) => {
-                                                    store.notice("Slowmode gespeichert.");
-                                                    actions::refresh_guild(store).await;
+                                if has_slowmode {
+                                    label { class: "sr-only", r#for: "slow-{channel.id}", "Slowmode für {channel.name}" }
+                                    select {
+                                        id: "slow-{channel.id}",
+                                        class: "nv-select",
+                                        style: "width: 120px; min-height: 36px",
+                                        disabled: !can,
+                                        onchange: move |event| {
+                                            let secs: i32 = event.value().parse().unwrap_or(0);
+                                            let id = id.clone();
+                                            spawn_forever(async move {
+                                                match api::update_channel(&id, json!({ "slowmode_secs": secs })).await {
+                                                    Ok(_) => {
+                                                        store.notice("Slowmode gespeichert.");
+                                                        actions::refresh_guild(store).await;
+                                                    }
+                                                    Err(err) => store.error(err),
                                                 }
-                                                Err(err) => store.error(err),
-                                            }
-                                        });
-                                    },
-                                    for (secs, label) in SLOWMODES {
-                                        option { key: "{secs}", value: "{secs}", selected: channel.slowmode_secs == secs, "{label}" }
+                                            });
+                                        },
+                                        for (secs, label) in SLOWMODES {
+                                            option { key: "{secs}", value: "{secs}", selected: channel.slowmode_secs == secs, "{label}" }
+                                        }
+                                    }
+                                }
+                                if can_edit {
+                                    button {
+                                        class: "nv-btn nv-btn--sm",
+                                        "aria-label": "{channel.name} bearbeiten",
+                                        onclick: move |_| selected.set(Some(open_id.clone())),
+                                        "Bearbeiten"
                                     }
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Ein Kanal im Detail: Berechtigungen (Overrides) und Webhooks.
+#[component]
+fn ChannelDetail(channel: Channel, onback: EventHandler<()>) -> Element {
+    let store = use_store();
+    let can_overrides = store.can(perm::MANAGE_ROLES) && store.can(perm::MANAGE_CHANNELS);
+    let can_webhooks = store.can(perm::MANAGE_WEBHOOKS) && channel.kind == KIND_TEXT;
+    rsx! {
+        section { class: "nv-section",
+            div { class: "nv-row",
+                button { class: "nv-btn nv-btn--ghost nv-btn--sm", onclick: move |_| onback.call(()), "← Alle Kanäle" }
+            }
+            div { class: "nv-row",
+                Icon { name: channel_icon(channel.kind), size: 18 }
+                h3 { "{channel.name}" }
+                span { class: "nv-faint", "{channel_kind_label(channel.kind)}" }
+            }
+        }
+        if can_overrides {
+            OverrideEditor { key: "{channel.id}", channel: channel.clone() }
+        } else {
+            section { class: "nv-section",
+                h3 { "Berechtigungen" }
+                p { class: "nv-faint", "Dafür brauchst du „Rollen verwalten“ und „Kanäle verwalten“." }
+            }
+        }
+        if can_webhooks {
+            WebhookSection { key: "wh-{channel.id}", channel_id: channel.id.clone() }
+        }
+    }
+}
+
+/// Wer in einem Override gemeint ist: (Art, ID, Anzeigename).
+fn override_target_name(detail: &GuildDetail, kind: &str, id: &str) -> String {
+    if kind == "role" {
+        detail
+            .roles
+            .iter()
+            .find(|role| role.id == id)
+            .map(|role| role.name.clone())
+            .unwrap_or_else(|| "Gelöschte Rolle".into())
+    } else {
+        detail
+            .member(id)
+            .map(|member| member.display_name.clone())
+            .unwrap_or_else(|| "Ehemaliges Mitglied".into())
+    }
+}
+
+/// Rechte-Editor für Kanal-Overrides: pro Rolle bzw. Mitglied und Recht
+/// „Verweigern“, „Standard“ (von der Rolle geerbt) oder „Erlauben“. Jede
+/// Änderung wird sofort gespeichert.
+#[component]
+fn OverrideEditor(channel: Channel) -> Element {
+    let store = use_store();
+    let detail = store.detail.read().clone().unwrap_or_default();
+    let channel_id = channel.id.clone();
+    let loaded = use_resource(use_reactive!(|channel_id| async move {
+        api::overrides(&channel_id).await
+    }));
+    let mut entries = use_signal(Vec::<ChannelOverride>::new);
+    let mut ready = use_signal(|| false);
+    use_effect(move || {
+        if let Some(Ok(list)) = &*loaded.read() {
+            entries.set(list.clone());
+            ready.set(true);
+        }
+    });
+    let everyone = detail
+        .roles
+        .iter()
+        .find(|role| role.is_everyone)
+        .map(|role| role.id.clone())
+        .unwrap_or_default();
+    let mut selected = use_signal(|| ("role".to_owned(), String::new()));
+    let current = {
+        let (kind, id) = selected.read().clone();
+        if id.is_empty() {
+            ("role".to_owned(), everyone.clone())
+        } else {
+            (kind, id)
+        }
+    };
+    let rows: &[(u64, &str, &str)] = if channel.kind == KIND_VOICE {
+        VOICE_OVERRIDES
+    } else {
+        TEXT_OVERRIDES
+    };
+    // Liste: @everyone immer, dann alle mit Override.
+    let mut targets: Vec<(String, String)> = vec![("role".into(), everyone.clone())];
+    for entry in entries.read().iter() {
+        if !(entry.kind == "role" && entry.target_id == everyone) {
+            targets.push((entry.kind.clone(), entry.target_id.clone()));
+        }
+    }
+    if !targets.contains(&current) {
+        targets.push(current.clone());
+    }
+    let addable_roles: Vec<Role> = detail
+        .roles
+        .iter()
+        .filter(|role| {
+            !role.is_everyone && !targets.iter().any(|(k, id)| k == "role" && *id == role.id)
+        })
+        .cloned()
+        .collect();
+    let addable_members: Vec<Member> = detail
+        .members
+        .iter()
+        .filter(|m| {
+            !targets
+                .iter()
+                .any(|(k, id)| k == "member" && *id == m.user_id)
+        })
+        .cloned()
+        .collect();
+    let entry = entries
+        .read()
+        .iter()
+        .find(|e| e.kind == current.0 && e.target_id == current.1)
+        .cloned()
+        .unwrap_or(ChannelOverride {
+            kind: current.0.clone(),
+            target_id: current.1.clone(),
+            allow: 0,
+            deny: 0,
+        });
+    let current_name = override_target_name(&detail, &current.0, &current.1);
+    let save_channel = channel.id.clone();
+
+    if !ready() {
+        return rsx! {
+            section { class: "nv-section",
+                h3 { "Berechtigungen" }
+                if let Some(Err(err)) = &*loaded.read() {
+                    p { class: "nv-field__error", role: "alert", "{err}" }
+                } else {
+                    Skeleton { lines: 3 }
+                }
+            }
+        };
+    }
+
+    rsx! {
+        section { class: "nv-section",
+            h3 { "Berechtigungen" }
+            p { class: "nv-muted", "Überschreibt die Rollenrechte nur in diesem Kanal. „Standard“ übernimmt, was die Rolle ohnehin darf; Verweigern schlägt Erlauben auf derselben Stufe, das Mitglied schlägt die Rolle." }
+            div { class: "nv-overrides",
+                div { class: "nv-overrides__targets", role: "listbox", "aria-label": "Rolle oder Mitglied",
+                    for (kind, id) in targets.clone() {
+                        {
+                            let active = (kind.clone(), id.clone()) == current;
+                            let name = if kind == "role" && id == everyone {
+                                "@everyone".to_owned()
+                            } else {
+                                override_target_name(&detail, &kind, &id)
+                            };
+                            let pick = (kind.clone(), id.clone());
+                            rsx! {
+                                button {
+                                    key: "{kind}-{id}",
+                                    class: classes(&["nv-overrides__target", if active { "is-selected" } else { "" }]),
+                                    role: "option",
+                                    "aria-selected": if active { "true" } else { "false" },
+                                    onclick: move |_| selected.set(pick.clone()),
+                                    Icon { name: if kind == "role" { "shield" } else { "user" }, size: 14 }
+                                    span { "{name}" }
+                                }
+                            }
+                        }
+                    }
+                    label { class: "sr-only", r#for: "override-add", "Rolle oder Mitglied hinzufügen" }
+                    select {
+                        id: "override-add",
+                        class: "nv-select",
+                        onchange: move |event| {
+                            let value = event.value();
+                            if let Some((kind, id)) = value.split_once(':') {
+                                selected.set((kind.to_owned(), id.to_owned()));
+                            }
+                        },
+                        option { value: "", selected: true, "+ Hinzufügen …" }
+                        if !addable_roles.is_empty() {
+                            optgroup { label: "Rollen",
+                                for role in addable_roles {
+                                    option { key: "r{role.id}", value: "role:{role.id}", "{role.name}" }
+                                }
+                            }
+                        }
+                        if !addable_members.is_empty() {
+                            optgroup { label: "Mitglieder",
+                                for member in addable_members {
+                                    option { key: "m{member.user_id}", value: "member:{member.user_id}", "{member.display_name}" }
+                                }
+                            }
+                        }
+                    }
+                }
+                div { class: "nv-overrides__perms",
+                    div { class: "nv-row nv-row--between",
+                        strong { if current.0 == "role" && current.1 == everyone { "@everyone" } else { "{current_name}" } }
+                        if entry.allow != 0 || entry.deny != 0 {
+                            button {
+                                class: "nv-btn nv-btn--ghost nv-btn--sm",
+                                onclick: {
+                                    let channel = save_channel.clone();
+                                    let entry = entry.clone();
+                                    move |_| {
+                                        let channel = channel.clone();
+                                        let entry = entry.clone();
+                                        entries.write().retain(|e| !(e.kind == entry.kind && e.target_id == entry.target_id));
+                                        spawn_forever(async move {
+                                            if let Err(err) = api::delete_override(&channel, &entry.kind, &entry.target_id).await {
+                                                store.error(err);
+                                            }
+                                        });
+                                    }
+                                },
+                                "Alles auf Standard"
+                            }
+                        }
+                    }
+                    for (bit, label, hint) in rows.iter().copied() {
+                        {
+                            let state = entry.state(bit);
+                            let base = entry.clone();
+                            let channel = save_channel.clone();
+                            let choose = move |next: OverrideState| {
+                                let mut changed = base.clone();
+                                changed.set(bit, next);
+                                let channel = channel.clone();
+                                {
+                                    let mut list = entries.write();
+                                    list.retain(|e| !(e.kind == changed.kind && e.target_id == changed.target_id));
+                                    if changed.allow != 0 || changed.deny != 0 {
+                                        list.push(changed.clone());
+                                    }
+                                }
+                                spawn_forever(async move {
+                                    let result = if changed.allow == 0 && changed.deny == 0 {
+                                        api::delete_override(&channel, &changed.kind, &changed.target_id).await
+                                    } else {
+                                        api::set_override(&channel, &changed).await
+                                    };
+                                    if let Err(err) = result {
+                                        store.error(err);
+                                    }
+                                });
+                            };
+                            let mut deny = choose.clone();
+                            let mut inherit = choose.clone();
+                            let mut allow = choose;
+                            rsx! {
+                                div { key: "{bit}", class: "nv-perm",
+                                    div { class: "nv-perm__text",
+                                        span { class: "nv-perm__label", "{label}" }
+                                        if !hint.is_empty() {
+                                            span { class: "nv-perm__hint", "{hint}" }
+                                        }
+                                    }
+                                    div { class: "nv-tristate", role: "radiogroup", "aria-label": "{label}",
+                                        button {
+                                            class: "is-deny",
+                                            role: "radio",
+                                            "aria-checked": if state == OverrideState::Deny { "true" } else { "false" },
+                                            title: "Verweigern",
+                                            onclick: move |_| deny(OverrideState::Deny),
+                                            Icon { name: "close", size: 14 }
+                                            span { class: "sr-only", "Verweigern" }
+                                        }
+                                        button {
+                                            role: "radio",
+                                            "aria-checked": if state == OverrideState::Inherit { "true" } else { "false" },
+                                            title: "Standard",
+                                            onclick: move |_| inherit(OverrideState::Inherit),
+                                            "/"
+                                            span { class: "sr-only", "Standard" }
+                                        }
+                                        button {
+                                            class: "is-allow",
+                                            role: "radio",
+                                            "aria-checked": if state == OverrideState::Allow { "true" } else { "false" },
+                                            title: "Erlauben",
+                                            onclick: move |_| allow(OverrideState::Allow),
+                                            Icon { name: "check", size: 14 }
+                                            span { class: "sr-only", "Erlauben" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Webhooks eines Textkanals: anlegen (URL nur einmal sichtbar), löschen.
+#[component]
+fn WebhookSection(channel_id: String) -> Element {
+    let store = use_store();
+    let id = channel_id.clone();
+    let mut hooks = use_resource(use_reactive!(|id| async move { api::webhooks(&id).await }));
+    let mut name = use_signal(String::new);
+    let mut created = use_signal(|| Option::<Webhook>::None);
+    let mut busy = use_signal(|| false);
+    let create_channel = channel_id.clone();
+    rsx! {
+        section { class: "nv-section",
+            h3 { "Webhooks" }
+            p { class: "nv-muted", "Andere Dienste (CI, Monitoring, Kalender) posten über eine geheime URL in diesen Kanal – ohne Konto." }
+            form {
+                class: "nv-row",
+                onsubmit: move |event| {
+                    event.prevent_default();
+                    let value = name.read().trim().to_owned();
+                    if value.is_empty() {
+                        return;
+                    }
+                    let channel = create_channel.clone();
+                    busy.set(true);
+                    spawn_forever(async move {
+                        match api::create_webhook(&channel, &value).await {
+                            Ok(hook) => {
+                                created.set(Some(hook));
+                                name.set(String::new());
+                                hooks.restart();
+                            }
+                            Err(err) => store.error(err),
+                        }
+                        busy.set(false);
+                    });
+                },
+                label { class: "sr-only", r#for: "webhook-name", "Name des Webhooks" }
+                input { id: "webhook-name", class: "nv-input", maxlength: "48", placeholder: "Name, z. B. Build-Bot", value: "{name}", oninput: move |e| name.set(e.value()) }
+                button { r#type: "submit", class: "nv-btn", disabled: busy() || name.read().trim().is_empty(), Icon { name: "plus", size: 16 } "Anlegen" }
+            }
+            if let Some(hook) = created() {
+                div { class: "nv-secret", role: "status",
+                    strong { "URL für „{hook.name}“" }
+                    p { class: "nv-faint", "Nur jetzt sichtbar. Behandle sie wie ein Passwort – wer sie kennt, kann in diesen Kanal schreiben." }
+                    div { class: "nv-row",
+                        input { class: "nv-input", readonly: true, value: "{hook.url.clone().unwrap_or_default()}", "aria-label": "Webhook-URL" }
+                        button {
+                            class: "nv-btn",
+                            onclick: {
+                                let url = hook.url.clone().unwrap_or_default();
+                                move |_| {
+                                    if let Some(window) = web_sys::window() {
+                                        let _ = window.navigator().clipboard().write_text(&url);
+                                        store.notice("URL kopiert.");
+                                    }
+                                }
+                            },
+                            "Kopieren"
+                        }
+                    }
+                    code { class: "nv-code", "curl -X POST -H 'Content-Type: application/json' -d '{{\"content\":\"Hallo\"}}' <URL>" }
+                }
+            }
+            match &*hooks.read() {
+                None => rsx! { Skeleton { lines: 2 } },
+                Some(Err(err)) => rsx! { p { class: "nv-field__error", role: "alert", "{err}" } },
+                Some(Ok(list)) if list.is_empty() => rsx! { p { class: "nv-faint", "Noch keine Webhooks." } },
+                Some(Ok(list)) => rsx! {
+                    div { class: "nv-list",
+                        for hook in list.clone() {
+                            {
+                                let hook_id = hook.id.clone();
+                                rsx! {
+                                    div { key: "{hook.id}", class: "nv-list__item",
+                                        Icon { name: "webhook", size: 16 }
+                                        div { class: "nv-list__main",
+                                            div { class: "nv-list__title", "{hook.name}" }
+                                            div { class: "nv-list__sub", "angelegt {crate::components::day_label(&hook.created_at)}" }
+                                        }
+                                        button {
+                                            class: "nv-btn nv-btn--danger nv-btn--sm",
+                                            onclick: move |_| {
+                                                let id = hook_id.clone();
+                                                spawn_forever(async move {
+                                                    match api::delete_webhook(&id).await {
+                                                        Ok(()) => {
+                                                            store.notice("Webhook gelöscht.");
+                                                            hooks.restart();
+                                                        }
+                                                        Err(err) => store.error(err),
+                                                    }
+                                                });
+                                            },
+                                            "Löschen"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
             }
         }
     }

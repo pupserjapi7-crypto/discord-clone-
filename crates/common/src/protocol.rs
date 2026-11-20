@@ -173,7 +173,7 @@ pub struct DmChannelView {
 
 /// JSON can only carry 53-bit integers safely, so browser clients send IDs as
 /// decimal strings. Accept both on the wire; serialize as i64 as before.
-mod id_compat {
+pub mod id_compat {
     use serde::{Deserialize, Deserializer};
 
     #[derive(Deserialize)]
@@ -183,11 +183,27 @@ mod id_compat {
         Str(String),
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
-        match Raw::deserialize(deserializer)? {
-            Raw::Int(value) => Ok(value),
-            Raw::Str(value) => value.parse::<i64>().map_err(serde::de::Error::custom),
+    impl Raw {
+        fn into_id<E: serde::de::Error>(self) -> Result<i64, E> {
+            match self {
+                Raw::Int(value) => Ok(value),
+                Raw::Str(value) => value.parse::<i64>().map_err(E::custom),
+            }
         }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        Raw::deserialize(deserializer)?.into_id()
+    }
+
+    /// Liste von IDs, jede als Zahl oder String.
+    pub fn deserialize_vec<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<i64>, D::Error> {
+        Vec::<Raw>::deserialize(deserializer)?
+            .into_iter()
+            .map(Raw::into_id)
+            .collect()
     }
 }
 
@@ -221,7 +237,8 @@ pub enum ClientOp {
         channel_id: i64,
         content: String,
         reply_to: Option<i64>,
-        #[serde(default)]
+        /// Vorher hochgeladene Anhänge (ab v0.8 ausgewertet).
+        #[serde(default, deserialize_with = "id_compat::deserialize_vec")]
         attachment_ids: Vec<i64>,
     },
     MessageEdit {
@@ -367,11 +384,24 @@ pub enum Event {
         muted: bool,
         deafened: bool,
         screen: bool,
+        /// Kamera läuft. Neu in v0.8.
+        #[serde(default)]
+        camera: bool,
     },
     /// Neue Direktnachricht. `message.channel_id` ist die ID des DM-Kanals;
     /// geht an alle Sessions beider Beteiligten. Neu in v0.6.
     DmMessageCreate {
         message: MessageView,
+    },
+    /// „In dieser Guild gibt es Neues für dich“ – nur an Sessions, die den
+    /// Kanal lesen dürfen, nie an den Autor; höchstens einmal pro Sekunde und
+    /// Kanal (der Rest der Sekunde wird nachgereicht). Ohne Kanal-ID; den
+    /// genauen Stand liefert `GET /users/@me/unread`. Mit `mentioned = true`
+    /// geht es sofort und nur an Erwähnte. Neu in v0.8.
+    GuildActivity {
+        guild_id: i64,
+        #[serde(default)]
+        mentioned: bool,
     },
 }
 
@@ -391,6 +421,7 @@ impl Event {
             Event::MessagePin { .. } => "message_pin",
             Event::VoiceStateUpdate { .. } => "voice_state_update",
             Event::DmMessageCreate { .. } => "dm_message_create",
+            Event::GuildActivity { .. } => "guild_activity",
         }
     }
 }
@@ -435,6 +466,37 @@ mod tests {
     }
 
     #[test]
+    fn attachment_ids_accept_numbers_and_strings() {
+        // MessagePack mit Zahlen (Rust-Clients) …
+        let op = ClientOp::MessageCreate {
+            nonce: 1,
+            channel_id: 42,
+            content: String::new(),
+            reply_to: None,
+            attachment_ids: vec![9_007_199_254_740_993, 5],
+        };
+        let body = rmp_serde::to_vec_named(&op).expect("encode");
+        match decode_body::<ClientOp>(&body).expect("decode") {
+            ClientOp::MessageCreate { attachment_ids, .. } => {
+                assert_eq!(attachment_ids, vec![9_007_199_254_740_993, 5]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        // … und JSON mit Strings (Browser-Bots).
+        let json = r#"{"t":"message_create","d":{"nonce":1,"channel_id":"42","content":"",
+            "reply_to":null,"attachment_ids":["9007199254740993",5]}}"#;
+        match serde_json::from_str::<ClientOp>(json).expect("json") {
+            ClientOp::MessageCreate { attachment_ids, .. } => {
+                assert_eq!(attachment_ids, vec![9_007_199_254_740_993, 5]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        // Ältere Clients lassen das Feld weg.
+        let json = r#"{"t":"message_create","d":{"nonce":1,"channel_id":42,"content":"x","reply_to":null}}"#;
+        assert!(serde_json::from_str::<ClientOp>(json).is_ok());
+    }
+
+    #[test]
     fn rejects_truncated_and_mismatched_frames() {
         assert!(matches!(
             decode(&[1, 0, 0, 0]),
@@ -454,6 +516,10 @@ mod tests {
     fn new_events_roundtrip_and_keep_their_tag() {
         let events = [
             Event::GuildUpdate { guild_id: 1 },
+            Event::GuildActivity {
+                guild_id: 7,
+                mentioned: true,
+            },
             Event::GuildMemberRemove {
                 guild_id: 1,
                 user_id: 2,
@@ -476,6 +542,7 @@ mod tests {
                 muted: false,
                 deafened: false,
                 screen: true,
+                camera: true,
             },
             Event::DmMessageCreate {
                 message: MessageView {

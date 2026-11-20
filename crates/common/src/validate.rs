@@ -91,6 +91,53 @@ pub fn validate_message_content(content: &str, max_len: usize) -> Result<(), &'s
     Ok(())
 }
 
+/// Höchstens so viele verschiedene Personen pro Nachricht erwähnen.
+pub const MAX_MENTIONS: usize = 20;
+
+/// `@handle`-Erwähnungen im Text, kleingeschrieben und ohne Doppelte. Punkte
+/// am Ende („@mara.“) gehören zum Satz, nicht zum Namen.
+pub fn mentioned_handles(content: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut rest = content;
+    while let Some(at) = rest.find('@') {
+        // `@` mitten in einem Wort (E-Mail-Adresse) ist keine Erwähnung.
+        let before = rest[..at].chars().next_back();
+        rest = &rest[at + 1..];
+        if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+            continue;
+        }
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+            .unwrap_or(rest.len());
+        let handle = rest[..end].trim_end_matches('.').to_ascii_lowercase();
+        if validate_handle(&handle).is_ok() && !found.contains(&handle) {
+            found.push(handle);
+            if found.len() == MAX_MENTIONS {
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// Höchstens so viele Anhänge pro Nachricht.
+pub const MAX_ATTACHMENTS: usize = 10;
+
+/// Wie [`validate_message_content`], aber mit Anhängen darf der Text leer sein.
+pub fn validate_message_body(
+    content: &str,
+    max_len: usize,
+    attachments: usize,
+) -> Result<(), &'static str> {
+    if attachments > MAX_ATTACHMENTS {
+        return Err("too many attachments");
+    }
+    if attachments > 0 && content.trim().is_empty() {
+        return Ok(());
+    }
+    validate_message_content(content, max_len)
+}
+
 pub fn validate_emoji(emoji: &str) -> Result<(), &'static str> {
     let count = emoji.chars().count();
     if count == 0 || count > MAX_EMOJI_LEN {
@@ -187,6 +234,29 @@ mod tests {
         assert!(validate_message_content(&"x".repeat(8001), 8000).is_err());
         assert!(validate_message_content("a\u{0}b", 8000).is_err());
         assert!(validate_message_content("line\nbreak\tok", 8000).is_ok());
+    }
+
+    #[test]
+    fn mentions_are_found_once_and_lowercased() {
+        assert_eq!(
+            mentioned_handles("Hey @Mara und @ida.k, kommt @mara heute?"),
+            vec!["mara".to_owned(), "ida.k".to_owned()]
+        );
+        assert_eq!(
+            mentioned_handles("Ende mit @tom_."),
+            vec!["tom_".to_owned()]
+        );
+        assert!(mentioned_handles("mail an a@b.de").is_empty());
+        assert!(mentioned_handles("@ allein, @x zu kurz").is_empty());
+    }
+
+    #[test]
+    fn attachments_allow_empty_text() {
+        assert!(validate_message_body("", 8000, 1).is_ok());
+        assert!(validate_message_body("  ", 8000, 2).is_ok());
+        assert!(validate_message_body("", 8000, 0).is_err());
+        assert!(validate_message_body("x", 8000, MAX_ATTACHMENTS + 1).is_err());
+        assert!(validate_message_body("a\u{0}b", 8000, 1).is_err());
     }
 
     #[test]

@@ -57,6 +57,28 @@ pub struct VoiceUi {
     pub speaking: Vec<String>,
     /// Nutzer-IDs mit aktivem Videostream (Kacheln).
     pub video_users: Vec<String>,
+    /// Eigene Kamera läuft.
+    pub camera: bool,
+    /// Nutzer-IDs, deren Kamerabild angekommen ist.
+    pub camera_users: Vec<String>,
+}
+
+/// Datei im Composer: lädt hoch, ist fertig oder fehlgeschlagen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingUpload {
+    pub key: u64,
+    pub name: String,
+    pub size: i64,
+    /// 0.0 bis 1.0
+    pub progress: f64,
+    pub state: UploadState,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum UploadState {
+    Uploading,
+    Done(Attachment),
+    Failed(String),
 }
 
 /// Wer in welchem Sprachkanal der offenen Guild ist (aus Events).
@@ -78,6 +100,10 @@ pub enum Overlay {
     Palette,
     Member(String),
     Confirm(ConfirmAction),
+    /// Bild in voller Größe.
+    Image(Attachment),
+    /// Neuer Beitrag in einem Forum.
+    NewPost(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -135,6 +161,12 @@ pub struct Store {
     pub gateway: Signal<Option<Gateway>>,
     pub nav_open: Signal<bool>,
     pub members_open: Signal<bool>,
+    /// Wartende Anhänge pro Kanal (bleiben beim Kanalwechsel erhalten).
+    pub uploads: Signal<HashMap<String, Vec<PendingUpload>>>,
+    /// Gerade wird eine Datei über den Chat gezogen.
+    pub dragging: Signal<bool>,
+    /// Ungelesen-Stand pro Server (Guild-ID → Stand) für die Server-Leiste.
+    pub guild_unread: Signal<HashMap<String, GuildUnread>>,
 }
 
 impl Store {
@@ -169,6 +201,9 @@ impl Store {
             gateway: Signal::new(None),
             nav_open: Signal::new(false),
             members_open: Signal::new(members_open),
+            uploads: Signal::new(HashMap::new()),
+            dragging: Signal::new(false),
+            guild_unread: Signal::new(HashMap::new()),
         }
     }
 

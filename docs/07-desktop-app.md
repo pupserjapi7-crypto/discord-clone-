@@ -10,8 +10,32 @@ WebKitGTK on Linux); no Electron and no bundled Chromium.
 | Window | 1280×800, minimum 960×600, title “Nova” |
 | Loads | `https://85-215-175-202.sslip.io` by default |
 | Override | `NOVA_DESKTOP_URL=https://… nova.exe` |
-| Installer | `Nova_<version>_x64-setup.exe` (NSIS, per-user, no admin) |
+| Installer | `Nova_<version>_x64-setup.exe` (NSIS, per-user, no admin), MSI; Linux deb + AppImage |
 | Bundle id | `dev.nova.desktop` |
+| Tray | „Nova anzeigen“, „Mit dem System starten“, „Beenden“; Linksklick zeigt das Fenster |
+| Schließen | legt das Fenster in den Tray; beendet wird über das Tray-Menü |
+| Benachrichtigungen | native (Windows-Toast, libnotify) über `tauri-plugin-notification` |
+| Autostart | aus, bis man ihn im Tray einschaltet; startet dann versteckt im Tray (`--minimized`) |
+| Zweiter Start | holt das laufende Fenster nach vorn (`tauri-plugin-single-instance`) |
+
+## Native Funktionen (ab 0.8)
+
+- **Benachrichtigungen ohne eigenen JS-Code:** Das Notification-Plugin ersetzt
+  in der Webview `window.Notification`; die Web-App ruft weiter die
+  Browser-API auf (`crates/ui/src/settings.rs`). Die Server-URL bekommt zur
+  Laufzeit eine Capability mit genau drei Rechten
+  (`notification:allow-is-permission-granted`, `…-request-permission`,
+  `…-notify`) – sonst kann die geladene Seite nichts von Tauri aufrufen.
+- **CSP:** Für die geladene Seite gilt die CSP, die der Server schickt
+  (`crates/nova/src/main.rs`, `content_security_policy`): `script-src 'self'
+  'wasm-unsafe-eval'`, keine fremden Verbindungen außer dem eigenen Gateway,
+  `frame-ancestors 'none'`. `tauri.conf.json` setzt dieselbe Richtlinie für
+  lokal ausgelieferte Seiten statt `null`.
+- **Installer:** Die NSIS-Deinstallation entfernt den Autostart-Eintrag
+  (`windows/hooks.nsh`, `HKCU\…\Run\Nova`). Das deb-Paket hängt von
+  `libayatana-appindicator3-1` ab (Tray unter Linux); ins AppImage wird die
+  Bibliothek gepackt. Die MSI-Deinstallation entfernt den Autostart-Eintrag
+  noch nicht – vorher im Tray ausschalten.
 
 ## Why the window loads the server URL
 
@@ -34,7 +58,14 @@ cd desktop
 cargo tauri build --bundles nsis,msi
 ```
 
-Output: `desktop/src-tauri/target/release/bundle/nsis/Nova_0.2.1_x64-setup.exe` und `bundle/msi/Nova_0.2.1_x64_en-US.msi`.
+Output: `desktop/src-tauri/target/release/bundle/nsis/Nova_<version>_x64-setup.exe` und `bundle/msi/Nova_<version>_x64_en-US.msi`.
+
+Linux (deb, AppImage):
+
+```bash
+sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libayatana-appindicator3-dev
+cd desktop && cargo tauri build --bundles deb,appimage
+```
 The GitHub release workflow builds this automatically on `windows-latest` and
 attaches the installer to the release tag.
 

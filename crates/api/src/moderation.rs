@@ -520,6 +520,51 @@ pub(crate) async fn set_override(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct OverrideView {
+    /// `role` oder `member`
+    kind: &'static str,
+    target_id: i64,
+    allow: u64,
+    deny: u64,
+}
+
+/// Overrides eines Kanals lesen (für den Rechte-Editor). Gleiche Rechte wie
+/// zum Ändern.
+pub(crate) async fn list_overrides(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(channel_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let Some(guild_id) = state.db.channel_guild(channel_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    require_guild_perm(
+        &state,
+        guild_id,
+        auth.user_id,
+        Permissions::MANAGE_ROLES | Permissions::MANAGE_CHANNELS,
+    )
+    .await?;
+    let views: Vec<OverrideView> = state
+        .db
+        .overrides(channel_id)
+        .await?
+        .into_iter()
+        .map(|row| OverrideView {
+            kind: if row.target_type == 1 {
+                "member"
+            } else {
+                "role"
+            },
+            target_id: row.target_id,
+            allow: row.allow as u64,
+            deny: row.deny as u64,
+        })
+        .collect();
+    Ok(json_ids(&views))
+}
+
 pub(crate) async fn delete_override(
     State(state): State<AppState>,
     auth: Auth,

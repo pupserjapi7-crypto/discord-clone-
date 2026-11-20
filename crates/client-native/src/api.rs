@@ -86,6 +86,7 @@ pub mod perm {
     pub const BAN_MEMBERS: u64 = 1 << 5;
     pub const TIMEOUT_MEMBERS: u64 = 1 << 6;
     pub const MANAGE_MESSAGES: u64 = 1 << 9;
+    pub const ATTACH_FILES: u64 = 1 << 11;
     pub const CREATE_INVITE: u64 = 1 << 19;
     pub const CREATE_THREADS: u64 = 1 << 23;
     pub const MANAGE_THREADS: u64 = 1 << 24;
@@ -153,6 +154,18 @@ pub struct Unread {
     pub last_read_id: Option<i64>,
 }
 
+/// Ungelesen-Stand eines Servers für die Server-Leiste
+/// (`GET /users/@me/unread`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildUnread {
+    #[serde(deserialize_with = "id")]
+    pub guild_id: i64,
+    #[serde(default)]
+    pub unread: bool,
+    #[serde(default)]
+    pub mentions: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct GuildDetail {
     pub guild: Guild,
@@ -183,6 +196,49 @@ pub struct Reaction {
     pub me: bool,
 }
 
+/// Anhang einer Nachricht (ab Server v0.8).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Attachment {
+    #[serde(deserialize_with = "id")]
+    pub id: i64,
+    pub filename: String,
+    #[serde(default)]
+    pub content_type: String,
+    #[serde(default)]
+    pub size: i64,
+    #[serde(default)]
+    pub width: Option<i32>,
+    #[serde(default)]
+    pub height: Option<i32>,
+}
+
+impl Attachment {
+    /// Bilder mit bekannter Größe zeigt der Client inline.
+    pub fn is_image(&self) -> bool {
+        self.content_type.starts_with("image/") && self.width.is_some() && self.height.is_some()
+    }
+}
+
+impl From<nova_common::protocol::AttachmentView> for Attachment {
+    fn from(view: nova_common::protocol::AttachmentView) -> Self {
+        Self {
+            id: view.id,
+            filename: view.filename,
+            content_type: view.content_type,
+            size: view.size,
+            width: view.width,
+            height: view.height,
+        }
+    }
+}
+
+/// Wohin ein Upload gehört.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UploadTarget {
+    Channel(i64),
+    Dm(i64),
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     #[serde(deserialize_with = "id")]
@@ -197,6 +253,8 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 /// Direktnachrichten-Kanal und das Gegenüber.
@@ -387,6 +445,15 @@ impl Api {
             .await
     }
 
+    /// Ungelesen-Stand aller eigenen Server, oder nur eines.
+    pub async fn unread(&self, guild: Option<i64>) -> Result<Vec<GuildUnread>, String> {
+        let path = match guild {
+            Some(id) => format!("/api/v1/users/@me/unread?guild_id={id}"),
+            None => "/api/v1/users/@me/unread".to_owned(),
+        };
+        self.request(reqwest::Method::GET, &path, None).await
+    }
+
     pub async fn guild(&self, id: i64) -> Result<GuildDetail, String> {
         self.request(reqwest::Method::GET, &format!("/api/v1/guilds/{id}"), None)
             .await
@@ -532,11 +599,90 @@ impl Api {
         .await
     }
 
-    pub async fn send_dm(&self, dm: i64, content: &str) -> Result<Message, String> {
+    pub async fn send_dm(
+        &self,
+        dm: i64,
+        content: &str,
+        attachment_ids: &[i64],
+    ) -> Result<Message, String> {
+        let ids: Vec<String> = attachment_ids.iter().map(i64::to_string).collect();
         self.request(
             reqwest::Method::POST,
             &format!("/api/v1/dms/{dm}/messages"),
-            Some(serde_json::json!({ "content": content })),
+            Some(serde_json::json!({ "content": content, "attachment_ids": ids })),
+        )
+        .await
+    }
+
+    // ---------------------------------------------------------------- Anhänge
+
+    /// Datei roh hochladen; der Server erkennt den Typ selbst.
+    pub async fn upload(
+        &self,
+        target: UploadTarget,
+        filename: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Attachment, String> {
+        let path = match target {
+            UploadTarget::Channel(id) => format!("/api/v1/channels/{id}/attachments"),
+            UploadTarget::Dm(id) => format!("/api/v1/dms/{id}/attachments"),
+        };
+        let mut builder = self
+            .http
+            .post(format!(
+                "{}{path}?filename={}",
+                self.base,
+                encode_component(filename)
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(bytes);
+        if let Some(token) = self.access_token() {
+            builder = builder.bearer_auth(token);
+        }
+        let response = builder.send().await.map_err(|err| err.to_string())?;
+        match response.status().as_u16() {
+            413 => {
+                let body = response.text().await.unwrap_or_default();
+                Err(if body.contains("quota") {
+                    "Der Speicherplatz dieses Servers ist voll.".into()
+                } else {
+                    "Die Datei ist zu groß.".into()
+                })
+            }
+            403 => Err("Hier darfst du keine Dateien anhängen.".into()),
+            429 => Err("Zu viele Uploads – kurz warten.".into()),
+            _ => self.handle(response).await,
+        }
+    }
+
+    /// Anhang laden (Bilder für die Vorschau, Dateien zum Speichern).
+    pub async fn download(&self, attachment: i64) -> Result<Vec<u8>, String> {
+        let mut builder = self
+            .http
+            .get(format!("{}/api/v1/attachments/{attachment}", self.base));
+        if let Some(token) = self.access_token() {
+            builder = builder.bearer_auth(token);
+        }
+        let response = builder.send().await.map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "Download fehlgeschlagen (HTTP {})",
+                response.status()
+            ));
+        }
+        response
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|err| err.to_string())
+    }
+
+    /// Noch nicht gesendeten Upload verwerfen.
+    pub async fn discard_attachment(&self, attachment: i64) -> Result<(), String> {
+        self.call(
+            reqwest::Method::DELETE,
+            &format!("/api/v1/attachments/{attachment}"),
+            None,
         )
         .await
     }
@@ -723,4 +869,17 @@ fn save_refresh(base: &str, token: Option<&str>) {
             let _ = std::fs::remove_file(path);
         }
     }
+}
+
+/// Prozent-Kodierung für einen Query-Wert (Dateinamen mit Umlauten, Leerzeichen).
+fn encode_component(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 3);
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }

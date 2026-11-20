@@ -388,21 +388,39 @@ create index messages_author_idx on messages (author_id, id desc);
 
 ## 12. Uploads und Storage-Abstraktion
 
+Umgesetzt in v0.8 (`crates/api/src/{blob,media,uploads}.rs`, Begründungen in
+`DECISIONS.md` vom 2026-11-20):
+
 ```rust
-#[async_trait]
 pub trait BlobStore: Send + Sync {
-    async fn put(&self, key: &BlobKey, data: &[u8]) -> Result<(), StoreError>;
-    async fn open(&self, key: &BlobKey) -> Result<BlobReader, StoreError>;
-    async fn delete(&self, key: &BlobKey) -> Result<(), StoreError>;
+    fn staging_dir(&self) -> &Path;                                   // Zwischendateien
+    fn put_file(&self, key: BlobKey, source: &Path) -> BoxFuture<io::Result<()>>;
+    fn open(&self, key: BlobKey, start: u64, len: u64) -> BoxFuture<io::Result<Option<BlobRead>>>;
+    fn delete(&self, key: BlobKey) -> BoxFuture<io::Result<()>>;
+    fn list_idle(&self, min_age: Duration) -> BoxFuture<io::Result<Vec<BlobKey>>>;
 }
 ```
 
-- Implementierung M1–M3: `LocalFs` unter `/var/lib/nova/uploads/{sha256[0..2]}/{sha256}` (content-addressed → Dedupe, unveränderliche URLs, langes Caching).
-- Späterer S3-Tausch ohne API-Änderung; `key` bleibt derselbe.
-- **Limits:** Bild 8 MB, Datei 25 MB, Avatar 2 MB; pro Guild 2 GB Default-Quota.
-- **Validierung:** `infer` für MIME-Sniffing (nie dem Client-Header trauen), Bilder mit `image` neu kodieren (WebP, max. 1600 px, EXIF strippen) — das entschärft polyglotte Payloads und riesige Pixelbomben. SVG wird **nicht** akzeptiert.
-- **Auslieferung:** Caddy `forward_auth` → `/internal/can-view` (prüft Kanalrechte) → `file_server` mit `sendfile`. Damit kostet ein 25-MB-Download ~0 % Rust-CPU statt Streaming durch Axum.
-- **90 GB NVMe:** OS+PG+Binary ≈ 8 GB, Backups ≈ 15 GB, Puffer 10 GB → **~55 GB für Uploads**. Bei 25 MB Durchschnitt sind das ~2.200 Dateien. Deshalb: Quota pro Guild, Warnung in `/metrics` bei 70 %, und vor öffentlichem Start entweder S3-Offload oder Upload-Ablauf für Nicht-Premium-Guilds.
+- `LocalFs` unter `NOVA_UPLOAD_DIR/{sha256[0..2]}/{sha256}` (content-addressed →
+  Dedupe, unveränderliche URLs, inkrementelle Backups). Ein Object-Store ließe
+  sich ohne API- oder Schemaänderung einhängen.
+- **Upload:** `POST /channels/{id}/attachments?filename=` bzw.
+  `/dms/{id}/attachments`, roher Body, gestreamt in `tmp/`, dabei gezählt
+  (`NOVA_MAX_UPLOAD_BYTES`, Standard 25 MB) und gehasht. Quota pro Guild
+  (`NOVA_GUILD_UPLOAD_QUOTA_BYTES`, 2 GB) bzw. pro Person für DMs
+  (`NOVA_DM_UPLOAD_QUOTA_BYTES`, 512 MB), 20 Uploads/min pro Konto.
+- **Typ und Bilder:** Typ aus den ersten Bytes, nie aus dem Header. JPEG, PNG,
+  GIF, WebP werden gefiltert (EXIF/GPS, XMP, IPTC, Textblöcke raus,
+  Farbprofil und Drehung bleiben) und vermessen; SVG ist nie ein Bild.
+- **Senden:** `attachment_ids` an `message_create` (Gateway) oder
+  `POST …/messages`; eine Transaktion hängt nur eigene, ungesendete Uploads aus
+  demselben Kanal an.
+- **Auslieferung:** `GET /attachments/{id}` durch Axum mit `Range`, `ETag`,
+  `nosniff`, `CSP: sandbox`; Download nur für Kanalmitglieder mit
+  `READ_MESSAGE_HISTORY`, ungesendete Uploads nur für die hochladende Person.
+- **Aufräumen:** alle 15 min verwaiste Uploads (> 24 h) und Blobs ohne Verweis
+  (> 1 h); Uploads und Bereinigung teilen sich eine Lese-/Schreibsperre.
+- **90 GB NVMe:** OS+PG+Binary ≈ 8 GB, Backups ≈ 15 GB, Puffer 10 GB → **~55 GB für Uploads**. Quota pro Guild hält einzelne Server im Zaum; vor einem öffentlichen Start S3-Offload oder Ablauf für alte Uploads.
 
 ---
 

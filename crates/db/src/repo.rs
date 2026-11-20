@@ -7,8 +7,8 @@ use nova_common::permissions::Permissions;
 use crate::{
     Db,
     models::{
-        Attachment, AuditRow, BanRow, BotRow, CHANNEL_THREAD, Channel, Guild, InviteRow, MemberRow,
-        MessageRow, OverrideRow, ReactionRow, Role, SessionRow, UnreadRow, User,
+        AuditRow, BanRow, BotRow, CHANNEL_THREAD, Channel, Guild, InviteRow, MemberRow, MessageRow,
+        OverrideRow, ReactionRow, Role, SessionRow, UnreadRow, User,
     },
 };
 
@@ -1099,93 +1099,65 @@ impl Db {
         .map(|_| ())
     }
 
-    // ----------------------------------------------------------- attachments
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create_attachment(
+    /// Erwähnte Mitglieder einer Nachricht festhalten (nur wer in der Guild
+    /// ist; unbekannte Namen und der Autor selbst werden ignoriert). Liefert
+    /// die neu eingetragenen Personen.
+    pub async fn record_mentions(
         &self,
-        id: i64,
-        channel_id: Option<i64>,
-        uploader_id: i64,
-        filename: &str,
-        content_type: &str,
-        size: i64,
-        sha256: &[u8],
-        width: Option<i32>,
-        height: Option<i32>,
-    ) -> Result<Attachment, sqlx::Error> {
-        sqlx::query_as!(
-            Attachment,
-            r#"insert into attachments
-                 (id, channel_id, uploader_id, filename, content_type, size, sha256, width, height)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-               returning id, channel_id, message_id, uploader_id, filename, content_type, size,
-                         sha256, width, height"#,
-            id,
-            channel_id,
-            uploader_id,
-            filename,
-            content_type,
-            size,
-            sha256,
-            width,
-            height
-        )
-        .fetch_one(&self.pool)
-        .await
-    }
-
-    pub async fn attachment(&self, id: i64) -> Result<Option<Attachment>, sqlx::Error> {
-        sqlx::query_as!(
-            Attachment,
-            r#"select id, channel_id, message_id, uploader_id, filename, content_type, size,
-                      sha256, width, height
-               from attachments where id = $1"#,
-            id
-        )
-        .fetch_optional(&self.pool)
-        .await
-    }
-
-    pub async fn attachments_for(
-        &self,
-        message_ids: &[i64],
-    ) -> Result<Vec<Attachment>, sqlx::Error> {
-        if message_ids.is_empty() {
+        message_id: i64,
+        guild_id: i64,
+        author_id: i64,
+        handles: &[String],
+    ) -> Result<Vec<i64>, sqlx::Error> {
+        if handles.is_empty() {
             return Ok(Vec::new());
         }
-        sqlx::query_as!(
-            Attachment,
-            r#"select id, channel_id, message_id, uploader_id, filename, content_type, size,
-                      sha256, width, height
-               from attachments where message_id = any($1) order by id"#,
-            message_ids
+        sqlx::query_scalar!(
+            r#"insert into message_mentions (message_id, user_id)
+               select $1, u.id from users u
+               join guild_members gm on gm.user_id = u.id and gm.guild_id = $2
+               where u.handle = any($4) and u.id <> $3
+               on conflict do nothing
+               returning user_id"#,
+            message_id,
+            guild_id,
+            author_id,
+            handles
         )
         .fetch_all(&self.pool)
         .await
     }
 
-    pub async fn attach_to_message(
+    /// Pro Kanal: neueste Nachricht, Lesestand und ungelesene Erwähnungen der
+    /// Person. Die Kanäle muss der Aufrufer vorher auf Sichtbarkeit filtern.
+    pub async fn unread_mentions(
         &self,
-        message_id: i64,
-        attachment_ids: &[i64],
-        uploader_id: i64,
-        channel_id: i64,
-    ) -> Result<u64, sqlx::Error> {
-        if attachment_ids.is_empty() {
-            return Ok(0);
+        user_id: i64,
+        channel_ids: &[i64],
+    ) -> Result<Vec<(i64, bool, i64)>, sqlx::Error> {
+        if channel_ids.is_empty() {
+            return Ok(Vec::new());
         }
-        let result = sqlx::query!(
-            r#"update attachments set message_id = $1
-               where id = any($2) and uploader_id = $3 and channel_id = $4 and message_id is null"#,
-            message_id,
-            attachment_ids,
-            uploader_id,
-            channel_id
+        let rows = sqlx::query!(
+            r#"select c.id as "channel_id!",
+                      coalesce((select max(m.id) from messages m where m.channel_id = c.id), 0)
+                        > coalesce(rs.last_read_id, 0) as "unread!",
+                      (select count(*) from message_mentions mm
+                         join messages m on m.id = mm.message_id
+                        where mm.user_id = $1
+                          and mm.message_id > coalesce(rs.last_read_id, 0)
+                          and m.channel_id = c.id) as "mentions!"
+               from unnest($2::bigint[]) as c(id)
+               left join read_states rs on rs.channel_id = c.id and rs.user_id = $1"#,
+            user_id,
+            channel_ids
         )
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(result.rows_affected())
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.channel_id, row.unread, row.mentions))
+            .collect())
     }
 
     pub async fn upsert_read_state(
@@ -1370,39 +1342,139 @@ impl Db {
         };
 
         let overrides = self.overrides(override_channel).await?;
-        let everyone_id = roles.iter().find(|r| r.is_everyone).map(|r| r.id);
-        let find = |target_type: i16, target_id: i64| {
-            overrides
-                .iter()
-                .find(|o| o.target_type == target_type && o.target_id == target_id)
-                .map(|o| (o.allow as u64, o.deny as u64))
+        Ok(finish(apply_channel_overrides(
+            perms, &roles, user_id, &overrides,
+        )))
+    }
+}
+
+/// Kanal-Overrides anwenden: `@everyone`, dann die eigenen Rollen, dann das
+/// Mitglied selbst; pro Stufe Verweigern vor Erlauben. Gemeinsam für
+/// [`Db::effective_permissions`] und [`Db::channel_permissions`].
+pub fn apply_channel_overrides(
+    mut perms: Permissions,
+    roles: &[Role],
+    user_id: i64,
+    overrides: &[OverrideRow],
+) -> Permissions {
+    let everyone_id = roles.iter().find(|r| r.is_everyone).map(|r| r.id);
+    let find = |target_type: i16, target_id: i64| {
+        overrides
+            .iter()
+            .find(|o| o.target_type == target_type && o.target_id == target_id)
+            .map(|o| {
+                (
+                    Permissions::from_bits_retain(o.allow as u64),
+                    Permissions::from_bits_retain(o.deny as u64),
+                )
+            })
+    };
+    if let Some((allow, deny)) = everyone_id.and_then(|id| find(0, id)) {
+        perms.apply_override(allow, deny);
+    }
+    for role in roles {
+        if Some(role.id) == everyone_id {
+            continue;
+        }
+        if let Some((allow, deny)) = find(0, role.id) {
+            perms.apply_override(allow, deny);
+        }
+    }
+    if let Some((allow, deny)) = find(1, user_id) {
+        perms.apply_override(allow, deny);
+    }
+    perms
+}
+
+impl Db {
+    /// Rechte einer Person für **alle** Kanäle einer Guild in vier Abfragen
+    /// (statt vier pro Kanal). Gleiche Regeln wie [`Db::effective_permissions`].
+    /// Leer für Nicht-Mitglieder.
+    pub async fn channel_permissions(
+        &self,
+        guild_id: i64,
+        user_id: i64,
+    ) -> Result<Vec<(Channel, Permissions)>, sqlx::Error> {
+        let Some(guild) = sqlx::query!("select owner_id from guilds where id = $1", guild_id)
+            .fetch_optional(&self.pool)
+            .await?
+        else {
+            return Ok(Vec::new());
         };
-
-        if let Some((allow, deny)) = everyone_id.and_then(|id| find(0, id)) {
-            perms.apply_override(
-                Permissions::from_bits_retain(allow),
-                Permissions::from_bits_retain(deny),
-            );
+        let channels = self.channels(guild_id).await?;
+        if guild.owner_id == user_id {
+            return Ok(channels
+                .into_iter()
+                .map(|channel| (channel, Permissions::all()))
+                .collect());
         }
+        let Some(member) = sqlx::query!(
+            "select timeout_until from guild_members where guild_id = $1 and user_id = $2",
+            guild_id,
+            user_id
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Ok(Vec::new());
+        };
+        let timed_out = member.timeout_until.is_some_and(|until| until > Utc::now());
+        let roles = sqlx::query_as!(
+            Role,
+            r#"select r.id, r.guild_id, r.name, r.color, r.permissions, r.position, r.is_everyone
+               from roles r
+               left join member_roles mr
+                 on mr.role_id = r.id and mr.user_id = $2 and mr.guild_id = $1
+               where r.guild_id = $1 and (r.is_everyone or mr.user_id is not null)"#,
+            guild_id,
+            user_id
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut base = Permissions::empty();
         for role in &roles {
-            if Some(role.id) == everyone_id {
-                continue;
-            }
-            if let Some((allow, deny)) = find(0, role.id) {
-                perms.apply_override(
-                    Permissions::from_bits_retain(allow),
-                    Permissions::from_bits_retain(deny),
-                );
-            }
+            base |= Permissions::from_bits_retain(role.permissions as u64);
         }
-        if let Some((allow, deny)) = find(1, user_id) {
-            perms.apply_override(
-                Permissions::from_bits_retain(allow),
-                Permissions::from_bits_retain(deny),
-            );
+        if base.contains(Permissions::ADMINISTRATOR) {
+            return Ok(channels
+                .into_iter()
+                .map(|channel| (channel, Permissions::all()))
+                .collect());
         }
-
-        Ok(finish(perms))
+        let ids: Vec<i64> = channels.iter().map(|channel| channel.id).collect();
+        let all_overrides = sqlx::query!(
+            r#"select channel_id, target_type, target_id, allow, deny
+               from channel_overrides where channel_id = any($1)"#,
+            &ids
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(channels
+            .into_iter()
+            .map(|channel| {
+                // Threads erben die Overrides ihres Elternkanals.
+                let source = if channel.kind == CHANNEL_THREAD {
+                    channel.parent_id.unwrap_or(channel.id)
+                } else {
+                    channel.id
+                };
+                let overrides: Vec<OverrideRow> = all_overrides
+                    .iter()
+                    .filter(|row| row.channel_id == source)
+                    .map(|row| OverrideRow {
+                        target_type: row.target_type,
+                        target_id: row.target_id,
+                        allow: row.allow,
+                        deny: row.deny,
+                    })
+                    .collect();
+                let mut perms = apply_channel_overrides(base, &roles, user_id, &overrides);
+                if timed_out {
+                    perms.remove(Permissions::TIMEOUT_REVOKED);
+                }
+                (channel, perms)
+            })
+            .collect())
     }
 }
 

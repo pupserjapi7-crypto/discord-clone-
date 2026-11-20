@@ -1,12 +1,16 @@
 //! HTTP API: auth, users, guilds, channels, message history, health.
 
+pub mod blob;
 mod bots;
 mod channels;
 mod dms;
 pub mod error;
+mod forums;
 mod guard;
+mod media;
 mod moderation;
 pub mod state;
+pub mod uploads;
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
@@ -72,6 +76,11 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/dms/{dm_id}/messages",
             get(dms::list_dm_messages).post(dms::create_dm_message),
         )
+        .route(
+            "/api/v1/dms/{dm_id}/attachments",
+            post(uploads::upload_to_dm),
+        )
+        .route("/api/v1/users/@me/unread", get(unread_summary))
         .route("/api/v1/guilds", get(list_guilds).post(create_guild))
         .route("/api/v1/guilds/{guild_id}", get(get_guild))
         .route("/api/v1/guilds/{guild_id}/channels", post(create_channel))
@@ -117,8 +126,29 @@ pub fn router(state: AppState) -> Router {
             axum::routing::patch(channels::update_channel).delete(channels::delete_channel),
         )
         .route(
+            "/api/v1/channels/{channel_id}/overrides",
+            get(moderation::list_overrides),
+        )
+        .route(
             "/api/v1/channels/{channel_id}/overrides/{kind}/{target_id}",
             put(moderation::set_override).delete(moderation::delete_override),
+        )
+        // Foren und Webhooks
+        .route(
+            "/api/v1/channels/{channel_id}/posts",
+            get(forums::list_posts).post(forums::create_post),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/webhooks",
+            get(forums::list_webhooks).post(forums::create_webhook),
+        )
+        .route(
+            "/api/v1/webhooks/{webhook_id}",
+            delete(forums::delete_webhook),
+        )
+        .route(
+            "/api/v1/webhooks/{webhook_id}/{token}",
+            post(forums::execute_webhook),
         )
         .route(
             "/api/v1/channels/{channel_id}/messages",
@@ -141,6 +171,15 @@ pub fn router(state: AppState) -> Router {
             put(channels::pin).delete(channels::unpin),
         )
         .route("/api/v1/channels/{channel_id}/ack", post(channels::ack))
+        // Anhänge
+        .route(
+            "/api/v1/channels/{channel_id}/attachments",
+            post(uploads::upload_to_channel),
+        )
+        .route(
+            "/api/v1/attachments/{attachment_id}",
+            get(uploads::download).delete(uploads::discard),
+        )
         // Bots
         .route("/api/v1/bots", get(bots::list_bots).post(bots::create_bot))
         .route("/api/v1/bots/{bot_id}/token", post(bots::reset_token))
@@ -304,14 +343,14 @@ fn verify_password(password: &str, encoded: &str) -> bool {
     }
 }
 
-fn sha256(data: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     let digest = Sha256::digest(data);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest);
     out
 }
 
-fn random_hex(bytes: usize) -> String {
+pub(crate) fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     OsRng.fill_bytes(&mut buf);
     hex::encode(buf)
@@ -582,6 +621,59 @@ async fn list_guilds(State(state): State<AppState>, auth: Auth) -> ApiResult<Jso
     Ok(json_ids(&summaries))
 }
 
+#[derive(Debug, Serialize)]
+struct GuildUnread {
+    guild_id: i64,
+    /// Mindestens ein sichtbarer Kanal hat Ungelesenes.
+    unread: bool,
+    /// Ungelesene Erwähnungen in sichtbaren Kanälen.
+    mentions: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct UnreadQuery {
+    /// Nur diesen Server (Clients fragen nach `guild_activity` gezielt nach).
+    guild_id: Option<i64>,
+}
+
+/// Ungelesen-Stand der eigenen Server für die Server-Leiste. Zählt nur
+/// Kanäle, die man sehen und deren Verlauf man lesen darf. Fremde Server
+/// tauchen nicht auf, auch nicht mit `?guild_id=`.
+async fn unread_summary(
+    State(state): State<AppState>,
+    auth: Auth,
+    Query(query): Query<UnreadQuery>,
+) -> ApiResult<Json<Value>> {
+    let mut summary = Vec::new();
+    let guilds = state.db.guilds_for_user(auth.user_id).await?;
+    for guild in guilds
+        .into_iter()
+        .filter(|guild| query.guild_id.is_none_or(|id| id == guild.id))
+    {
+        let channels: Vec<i64> = state
+            .db
+            .channel_permissions(guild.id, auth.user_id)
+            .await?
+            .into_iter()
+            .filter(|(channel, perms)| {
+                (channel.kind == nova_db::models::CHANNEL_TEXT
+                    || channel.kind == nova_db::models::CHANNEL_THREAD)
+                    && perms.contains(Permissions::VIEW_CHANNEL)
+                    && perms.contains(Permissions::READ_MESSAGE_HISTORY)
+                    && !(channel.kind == nova_db::models::CHANNEL_THREAD && channel.archived)
+            })
+            .map(|(channel, _)| channel.id)
+            .collect();
+        let rows = state.db.unread_mentions(auth.user_id, &channels).await?;
+        summary.push(GuildUnread {
+            guild_id: guild.id,
+            unread: rows.iter().any(|(_, unread, _)| *unread),
+            mentions: rows.iter().map(|(_, _, mentions)| mentions).sum(),
+        });
+    }
+    Ok(json_ids(&summary))
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateGuildRequest {
     name: String,
@@ -721,9 +813,9 @@ async fn create_channel(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     validate::validate_channel_name(&req.name)
         .map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
-    if req.kind != 0 && req.kind != 1 {
+    if !matches!(req.kind, 0 | 1 | 3) {
         return Err(ApiError::BadRequest(
-            "kind must be 0 (text) or 1 (voice)".into(),
+            "kind must be 0 (text), 1 (voice) or 3 (forum)".into(),
         ));
     }
     if !state.db.is_member(guild_id, auth.user_id).await? {
@@ -901,6 +993,8 @@ struct VoiceParticipantView {
     muted: bool,
     screen: bool,
     deafened: bool,
+    /// Ab v0.8.
+    camera: bool,
 }
 
 async fn voice_channel(
@@ -924,6 +1018,7 @@ fn voice_event(
         muted: participant.is_some_and(|p| p.muted),
         deafened: participant.is_some_and(|p| p.deafened),
         screen: participant.is_some_and(|p| p.screen),
+        camera: participant.is_some_and(|p| p.camera),
     }
 }
 
@@ -999,6 +1094,9 @@ struct VoiceStateRequest {
     deafened: bool,
     #[serde(default)]
     screen: bool,
+    /// Ab v0.8; ältere Clients senden es nicht (dann bleibt die Kamera aus).
+    #[serde(default)]
+    camera: bool,
 }
 
 /// Der Client meldet Stumm/Taub/Bildschirm; alle Mitglieder sehen es sofort.
@@ -1015,6 +1113,7 @@ async fn voice_state(
         req.muted,
         req.deafened,
         req.screen,
+        req.camera,
     ) else {
         return Err(ApiError::NotFound);
     };
@@ -1042,9 +1141,46 @@ async fn voice_participants(
             muted: participant.muted,
             screen: participant.screen,
             deafened: participant.deafened,
+            camera: participant.camera,
         })
         .collect();
     Ok(json_ids(&participants))
+}
+
+/// Was der SFU selbst bemerkt (Videospur kam an oder ist weg, Verbindung
+/// abgerissen), geht als `voice_state_update` an die Guild. Ohne das sahen
+/// die anderen eine Bildschirmfreigabe erst nach dem nächsten Statusbericht
+/// und abgerissene Verbindungen gar nicht.
+pub fn spawn_sfu_events(state: AppState) {
+    let Some(events) = state.sfu.take_events() else {
+        return;
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    // Der SFU meldet über einen std-Kanal (seine Räume sind OS-Threads).
+    let spawned = std::thread::Builder::new()
+        .name("sfu-events".into())
+        .spawn(move || {
+            while let Ok(event) = events.recv() {
+                if tx.send(event).is_err() {
+                    break;
+                }
+            }
+        });
+    if spawned.is_err() {
+        tracing::warn!("SFU events thread could not start");
+        return;
+    }
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let Ok(Some(channel)) = state.db.channel(event.channel_id).await else {
+                continue;
+            };
+            state.gateway.publish_guild(
+                channel.guild_id,
+                &voice_event(&channel, event.user_id, event.participant.as_ref()),
+            );
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1064,11 +1200,24 @@ async fn readyz(State(state): State<AppState>) -> ApiResult<Json<serde_json::Val
     })))
 }
 
-async fn metrics(State(state): State<AppState>) -> String {
-    state.metrics.render(
+/// Nur für diesen Rechner (`curl http://127.0.0.1:8080/metrics`), wie in der
+/// Architektur vorgesehen. Hinter dem Proxy kommt jede Anfrage von Loopback;
+/// dort entscheidet die Adresse, die der Proxy weiterreicht.
+async fn metrics(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> ApiResult<String> {
+    let ip = client_ip(&headers, peer.ip(), state.cfg.trust_proxy);
+    if !peer.ip().is_loopback() || !ip.is_loopback() {
+        return Err(ApiError::NotFound);
+    }
+    let mut out = state.metrics.render(
         nova_common::metrics::process_rss_bytes(),
         state.started.elapsed().as_secs(),
-    )
+    );
+    out.push_str(&state.sfu.render_metrics());
+    Ok(out)
 }
 
 #[allow(dead_code)]

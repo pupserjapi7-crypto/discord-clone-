@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 15.11.2026 · **Version:** 0.7.0 (Design „Funkraum“, Schrift Atkinson Hyperlegible Next)
+**Stand:** 20.11.2026 · **Version:** 0.8.0 (Uploads, Foren, Ungelesen pro Server, Voice-Messung)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
@@ -165,6 +165,202 @@ Server-Release-Build waren vor den Änderungen **grün**.
   Bildschirme in Dark und Light). Nativer Client: 35 MB Working Set nach
   10 s (vorher ~32 MB), erste Ansicht nach 20 ms.
 
+### Uploads (0.8.0, 20.11.2026)
+- **Server:** `BlobStore`-Trait mit `LocalFs` (`NOVA_UPLOAD_DIR/{hash[0..2]}/{hash}`,
+  SHA-256, Dedupe). `POST /channels/{id}/attachments?filename=` und
+  `/dms/{id}/attachments`: roher Body, gestreamt in eine Zwischendatei
+  (20 MB Upload = +4 MB RSS), Limit `NOVA_MAX_UPLOAD_BYTES` (25 MB, auch ohne
+  `Content-Length`), Quota pro Guild (2 GB) bzw. pro Person in DMs (512 MB),
+  20 Uploads/min. Typ aus den ersten Bytes; JPEG/PNG/WebP ohne EXIF/GPS, XMP,
+  IPTC, Textblöcke und Anhängsel nach dem Bildende, Drehung bleibt
+  (`crates/api/src/media.rs`, ohne Neukodieren). SVG und alles andere nur als
+  Download. `GET /attachments/{id}` mit Rechteprüfung, `Range`, `ETag`/`304`,
+  `nosniff`, `CSP: sandbox`; `DELETE` für eigene, ungesendete Uploads.
+  Bereinigung alle 15 min (verwaiste Uploads > 24 h, Blobs ohne Verweis).
+- **Senden:** `attachment_ids` im Gateway (`message_create`) und per REST
+  (Kanal, DM, Bots), Transaktion hängt nur eigene, ungesendete Uploads aus
+  demselben Kanal an; mit Anhang darf der Text leer sein (Migration `0004`).
+  Anhänge auch in Pins und im DM-Verlauf.
+- **Web:** „+“ im Composer, Ziehen & Ablegen auf Verlauf oder Composer,
+  Einfügen aus der Zwischenablage (Screenshots), Fortschritt per XHR,
+  Chips mit Entfernen, Bilder inline mit festen Maßen (kein Springen),
+  Bildansicht mit „Herunterladen“, Videos/Audio mit Player, Dateien als Zeile.
+  Neues Recht „Dateien anhängen“ im Rollen-Editor. Galerie: `?screen=uploads`.
+- **Nativ:** „+“ öffnet den Systemdialog (rfd, unter Linux XDG-Portal statt
+  GTK), Chips mit Status, Bilder als verkleinerte Vorschau (EXIF-Drehung,
+  höchstens 720 px, max. 96 im Speicher), Klick speichert über den
+  Speichern-Dialog, Dateien mit Speichern-Knopf; in Kanälen und DMs.
+- **Installer/Betrieb:** `install.sh` legt `/var/lib/nova/uploads` an, trägt
+  `NOVA_UPLOAD_DIR` auch in bestehende `nova.env` nach (ohne den Eintrag
+  startete der Dienst unter `ProtectSystem=strict` nicht), installiert
+  `nova-backup` (DB-Dump + Uploads) samt Cronjob, `--no-backup` überspringt
+  das. systemd-Unit: `StateDirectory=nova`, Standard für `NOVA_UPLOAD_DIR`.
+  `nova doctor` meldet Schreibbarkeit und Belegung.
+- **Getestet** (20.11.2026, lokal): 2 Integrationstests (Rechte, Metadaten,
+  Range, 304, SVG, Quota-Fehler, Verwerfen, Kanal-Override, Gateway, DMs,
+  Bereinigung samt Blob), Unit-Tests für Typerkennung, JPEG/PNG/WebP-Filter,
+  Range, Dateinamen. Web per Playwright: Auswahl, Fortschritt, Senden,
+  Bildansicht, Download, Reload, Ziehen & Ablegen, Einfügen, Nachricht nur
+  aus Anhang, Dark/Light, Galerie. Nativ unter Xvfb: Vorschau, Datei-Zeile,
+  Chips, Senden mit Anhang (`NOVA_DEV_ATTACH`, da der Dateidialog dort nicht
+  bedienbar ist). Backup-Skript gegen eine echte Datenbank.
+- **Nicht getestet:** Dateidialoge auf echtem Windows/Linux-Desktop,
+  Speichern-Dialog, Uploads über Apache auf dem VPS.
+- **Messwerte:** WASM gzip 527 KB (vorher 502 KB, +25 KB), roh 1.346 KB.
+- Bekannt: Bilder im nativen Client haben eckige Ecken (tiny-skia ignoriert
+  den Radius), Vorschaubilder (Thumbnails) erzeugt der Server nicht – große
+  Fotos lädt die Web-UI in voller Größe.
+
+### Kanal-Rechte, Foren und Webhooks (0.8.0, 20.11.2026)
+- **Rechte-Editor** (Server-Einstellungen → Kanäle → Bearbeiten): pro Rolle
+  oder Mitglied und Recht „Verweigern / Standard / Erlauben“, sofort
+  gespeichert; „Alles auf Standard“ löscht den Override. Neu:
+  `GET /channels/{id}/overrides`. Text/Forum: Sehen, Schreiben, Verlauf,
+  Reagieren, Anhängen, Threads starten, Nachrichten/Threads verwalten;
+  Sprache: Sehen, Beitreten, Sprechen, Video senden.
+- **Foren** (`kind = 3`): Anlegen im Kanal-Dialog, Beitragsliste (Titel,
+  Vorschau, Autor, Antworten, zuletzt aktive oben), „Neuer Beitrag“, ein Klick
+  öffnet den Beitrag als Thread rechts. Direkt ins Forum schreiben lehnen
+  Gateway und REST ab. Nativer Client: Foren bei den Textkanälen, Beiträge
+  als Threads darunter, Hinweis statt Eingabezeile (Beiträge starten nur in
+  der Web-App).
+- **Webhooks:** anlegen/löschen pro Textkanal (`MANAGE_WEBHOOKS`, neu im
+  Rollen-Editor), URL einmal sichtbar mit Kopieren, `POST
+  /webhooks/{id}/{token}` postet als Bot-Konto des Webhooks, rate-limitiert.
+  Migration `0005_forums_webhooks` (nur neue Tabelle).
+- **Getestet:** Integrationstest `forums_webhooks_and_channel_overrides`
+  (Forum ohne Direktnachrichten, Beitrag mit Anhang, Antworten-Zähler,
+  Override lesen/verbieten, Webhook-Rechte, falsches Token 404, Ausführen,
+  Löschen); im Browser: Forum per Dialog, Beitrag, Antwort, Override setzen
+  und zurücknehmen, Webhook anlegen, per URL auslösen, Nachricht von
+  „Build-Bot“ im Kanal.
+- **Nicht gebaut:** Forum-Tags und Sortierung, Webhook-Namen pro Nachricht
+  überschreiben, Forum in der Komponenten-Galerie (braucht den Server).
+
+### Screenshare, Simulcast und Kamera (0.8.0, 20.11.2026)
+- **Simulcast mit Schichtwahl:** Bildschirm und Kamera senden aus dem Browser
+  drei H.264-Schichten (voll, ½, ¼). Der SFU wählt pro Empfänger und Spur die
+  Schicht, wechselt am Schlüsselbild (fordert es sofort an) und weicht aus,
+  wenn eine Schicht 1,5 s ausbleibt. Empfänger: Bildschirme hoch (ab drei
+  gleichzeitig mittel), Kameras mittel (ab fünf Personen klein);
+  Einstellung „Automatisch / Immer hoch / Datensparend“.
+- **Qualitätsstufen beim Teilen:** Ausgewogen (1080p30), Scharf (1440p15,
+  `contentHint: text`), Flüssig (720p60, `motion`).
+- **Ton mitsenden:** Tab-Ton bzw. Systemton (Chrome/Windows), eigene Spur
+  `s{id}` mit eigener Lautstärke/Taubschaltung, ohne Sprecher-Ring.
+- **Kamera:** Knopf im Dock, 720p30 mit Simulcast, Bild in der Kachel statt
+  Avatar, eigene Vorschau gespiegelt, Gerätewahl in den Einstellungen; Recht
+  „Video senden“ (bisher „Bildschirm teilen“). Video-Limit zählt Bildschirme
+  und Kameras (8 pro Raum).
+- **SFU räumt auf und meldet:** Beendete Spuren fallen weg (kein
+  eingefrorenes Bild mehr), Bildschirm/Kamera an/aus und Verbindungsabrisse
+  gehen sofort als `voice_state_update` an alle (vorher blieben Abgerissene
+  sichtbar, `screen` kam nur zufällig rechtzeitig an).
+- **Kompatibel:** ältere Web-Clients und der native Client bekommen weiter
+  `u{id}` für Mikrofon und Bildschirm und die hohe Schicht; `c…`/`s…`
+  übergehen sie.
+- **Getestet** (lokal, zwei Chromium mit Fake-Geräten, SFU auf der
+  Container-IP): Kamera A sendet 1280×720/640×360/320×180, B empfängt
+  640×360 (automatisch), 1280×720 (hoch), 320×180 (datensparend), Kamera aus
+  → Kachel weg; Bildschirm 1920×1080/960×540/480×270, B empfängt 1920×1080,
+  Ton als zweites Audio-Element, Freigabe aus → Bühne weg; eigene Vorschau
+  bleibt beim Beitritt anderer erhalten. Unit-Tests für Schichtwechsel und
+  Rückfall. **Nicht getestet:** echte Kameras/Bildschirme, Systemton unter
+  Windows, Bandbreiten-Engpässe (Chrome schaltet dann selbst Schichten ab),
+  Kamera im nativen Client (nicht gebaut).
+
+### Voice: Messung und SFU-Schleife (0.8.0, 20.11.2026)
+- **Drei Fehler im Raum-Thread des SFU gefunden und behoben** (alle seit dem
+  ersten Voice-Commit, also auch in der Live-Version 0.2.2):
+  1. Der Socket war schon beim ersten Lesen nicht blockierend: jeder
+     Sprachraum belegte dauerhaft **100 % eines Kerns**, auch fünf Minuten
+     nach dem Auflegen. Jetzt ~0 % im Leerlauf.
+  2. Jede gesendete Ausgabe landete als leerer Eintrag in der
+     Weiterleitungs-Warteschlange und kostete einen kompletten Durchlauf über
+     alle Verbindungen; dazu wurden bis zu 256 Pakete am Stück gelesen. Bei
+     vielen Personen lief dadurch die DTLS-Warteschlange (max. 30) über und
+     der SFU **warf Teilnehmer raus** („receive queue full“): bei 30 Personen
+     kamen 72 % der Pakete nicht an. Jetzt: Weiterleitung im Stapel, höchstens
+     24 Pakete am Stück, Aufräumen nur, wenn jemand weg ist – **0 % Verlust**.
+  3. str0m gibt geschriebene Pakete erst nach einem Zeitschritt frei; der SFU
+     (und der native Client, bis zu 5 ms) warteten dafür auf das nächste
+     Paket bzw. den nächsten Durchlauf. Bei zwei Personen sank die Laufzeit
+     durch den SFU dadurch von p50 12 ms auf **0,2 ms**.
+- **Gemessen** (Release-Build, lokal; Werte in `docs/03-roadmap.md`): SFU
+  intern p99 0,67 ms bei 30 Personen (Budget 5 ms); 30 Personen in einem
+  Raum: 0 % Verlust, p99 4,5 ms durch den SFU, 92 MB RAM, 56 % eines Kerns;
+  Ende-zu-Ende Web ↔ Web ohne Geräte p50 40–56 ms (Budget 100 ms).
+- **Werkzeuge:** `nova-loadtest --mode voice` (N echte str0m-Teilnehmer,
+  Laufzeit, Verlust, CPU/RAM des Servers), `--mode clicktrack`/`clickdelay`
+  für Mund-zu-Ohr mit echten Geräten; Metrik `nova_sfu_forward_*` in
+  `/metrics`.
+- **Sicherheit nebenbei:** `/metrics` nur noch lokal (war über den Proxy
+  öffentlich); `X-Forwarded-For` wertet den letzten Eintrag aus (der erste ist
+  vom Client fälschbar – damit ließen sich die IP-Rate-Limits umgehen).
+- **Installer:** neue `nova.env` bekommt `NOVA_SFU_PUBLIC_IP` vorbelegt,
+  fehlt sie, warnt `install.sh`; die Caddy-Vorlage setzte `camera=()` und
+  hätte die Kamera gesperrt (Header jetzt nur noch von `nova serve`).
+- **Nicht gemessen:** Mund-zu-Ohr mit Mikrofon und Lautsprecher, nativer
+  Client (keine Audiogeräte im Container), Verbindungen über echtes Internet.
+
+### Ungelesen und Erwähnungen pro Server (0.8.0, 20.11.2026)
+- **Server-Leiste** (Web und nativ): Punkt in der Ecke, wenn ein sichtbarer
+  Kanal Neues hat; rote Zahl für ungelesene Erwähnungen (`@handle`), ab 100
+  „99+“. Der offene Server zeigt keinen Punkt (das macht die Kanalliste),
+  wohl aber Erwähnungen aus anderen Kanälen. Screenreader/Tooltip: „Name,
+  ungelesen“ bzw. „Name, 2 Erwähnungen“.
+- **Server:** Erwähnungen landen beim Speichern in `message_mentions` (nur
+  Mitglieder, nicht der Autor, max. 20 pro Nachricht; Gateway, REST,
+  Forum-Beiträge, Webhooks). `GET /users/@me/unread[?guild_id=]` rechnet die
+  Rechte aller Kanäle eines Servers in einem Durchgang (Overrides in einer
+  Abfrage, Threads erben vom Elternkanal) und zählt nur Kanäle mit Sehen +
+  Verlauf. Eigene REST-Nachrichten setzen jetzt den eigenen Lesestand mit
+  (wie schon das Gateway). Migration `0006_mention_index` (nur ein Index).
+- **Ereignis `guild_activity`** ohne Kanal-ID, nur an Sessions mit
+  Leserecht für den Kanal und nie an den Autor; pro Kanal höchstens eins pro
+  Sekunde (der Rest der Sekunde wird nachgereicht). Erwähnte bekommen sofort
+  einen eigenen Hinweis. Clients setzen den Punkt selbst und fragen nur bei
+  Erwähnungen (entprellt 1,5 s), beim Verbinden, beim Verlassen eines Servers
+  und bei Fensterfokus (höchstens alle 30 s) nach. Ein erster Entwurf schickte
+  den Hinweis an alle Sessions – das hätte verraten, wann in versteckten
+  Kanälen geschrieben wird; vor dem Commit korrigiert.
+- **Getestet:** Integrationstest `unread_summary_counts_only_visible_mentions`
+  (Hinweis nur bei sichtbarer Erwähnung, versteckter Kanal: kein Ereignis und
+  keine Zählung, Autor bekommt nichts, Serie → eins sofort plus eins
+  nachgereicht, fremder Server bleibt unsichtbar, Selbst-Erwähnung und eigene
+  Nachricht zählen nicht, Lesebestätigung leert); im Browser mit zwei Konten:
+  Punkt, keine Abfrage bei fünf Folgenachrichten, Zahl bei Erwähnung, Öffnen
+  leert, versteckter Kanal bleibt ohne Punkt; nativer Client unter Xvfb:
+  Punkt und Zahl. Migrationen 1–6 frisch und 5 → 6 als Update.
+- **Nicht gebaut:** Erwähnungs-Zahl pro Kanal in der Kanalliste, `@everyone`/
+  Rollen-Erwähnungen, Lesestand-Abgleich zwischen Geräten in Echtzeit (nur
+  beim Fokus).
+
+### Desktop-Hülle und Web-Sicherheit (0.8.0, 20.11.2026)
+- **CSP für die Web-App** (auch in Tauri, das die Server-URL lädt): `nova
+  serve` schickt für `index.html` `script-src 'self' 'wasm-unsafe-eval'`,
+  `connect-src 'self'` + eigenes Gateway, `frame-ancestors 'none'`,
+  `object-src 'none'`, dazu `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, `nosniff`. Geprüft per Playwright: Anmeldung, Senden,
+  Palette, Upload, Bildansicht und Voice-Beitritt ohne einen CSP-Verstoß.
+  `tauri.conf.json`: dieselbe Richtlinie statt `csp: null`.
+- **Caching:** gehashte Dateien (`assets/*-dxh*`) ein Jahr `immutable`, alles
+  andere mit `ETag`/`304`. Vorher lud jeder Aufruf das 1,3-MB-WASM neu.
+- **Tauri:** Tray („Nova anzeigen“, „Mit dem System starten“, „Beenden“,
+  Linksklick zeigt das Fenster), Schließen legt in den Tray, native
+  Benachrichtigungen über `tauri-plugin-notification` (ersetzt
+  `window.Notification`, die Web-App bleibt unverändert; die Server-URL bekommt
+  nur drei Benachrichtigungsrechte), Autostart optional über den Tray (startet
+  versteckt), eine Instanz.
+- **Installer:** NSIS-Deinstallation entfernt den Autostart-Eintrag
+  (`desktop/src-tauri/windows/hooks.nsh`), deb hängt von
+  `libayatana-appindicator3-1` ab, Release-Workflow installiert die
+  AppIndicator-Header. `Cargo.lock` der Hülle ist jetzt eingecheckt.
+- **Getestet** (lokal, Linux/WebKitGTK unter Xvfb): Build, Fenster lädt die
+  App mit CSP, Tray-Aufbau ohne Absturz. **Nicht getestet:** Tray-Menü,
+  Benachrichtigungen und Autostart auf echtem Windows/Linux-Desktop (hier kein
+  D-Bus), MSI-Deinstallation (entfernt den Autostart-Eintrag noch nicht).
+
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
   Bann/Entbannen, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log – mit
@@ -189,27 +385,37 @@ Server-Release-Build waren vor den Änderungen **grün**.
 
 ### Messwerte
 
-Siehe `docs/03-roadmap.md`: Dispatch-p99 0,98 ms, Server-RAM 11,5 MB Leerlauf,
-WASM 501 KB gzip.
+Siehe `docs/03-roadmap.md` (v0.8.0, Linux, Release): Dispatch-p99 2,1 ms bei
+120 Verbindungen, Server-RAM 22,6 MB Leerlauf, WASM 605 KB gzip, SFU p99
+0,67 ms, 30 Personen Voice 92 MB, Web ↔ Web ohne Geräte 40–56 ms.
+
+### Release-Check 0.8.0 (20.11.2026)
+- `cargo xtask check` grün (fmt, Clippy Workspace + WASM, alle Tests inkl.
+  12 Integrationstests), UI-Build aktuell, Migrationen 1–6 frisch und als
+  Update, Smoke-Test im Browser gegen den Release-Build.
+- **Gefunden:** Der Server setzte kein `TCP_NODELAY`; kleine Gateway-Frames
+  warteten auf das verzögerte TCP-ACK des Clients (Linux 40 ms, Windows bis
+  200 ms). Jetzt gesetzt: Ack-Rundreise p50 42 → 8 ms. Der Lasttest setzt es
+  wie Browser auch auf seiner Seite.
 
 ---
 
 ## Offen
 
-1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
-   Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
-   automatisierbar.
-2. **Uploads:** `BlobStore` (content-addressed, SHA-256), Upload-Endpunkt mit
-   Größenlimit, Download nur für Kanalmitglieder, „+“ im Composer.
-3. **Tauri:** CSP statt `null`, Tray (Anzeigen/Beenden), native
-   Benachrichtigungen, Autostart optional. Lokal nicht baubar ohne MSVC/WebView2-SDK;
-   die CI baut die Installer.
-4. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
-   Systemaudio; Kamera.
-5. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
-6. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
-   Ungelesen-Daten für alle Server (die API liefert sie nur für den offenen).
-7. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+1. **Voice mit echten Geräten messen:** Mund-zu-Ohr mit zwei Rechnern
+   (`nova-loadtest --mode clicktrack` → abspielen und stereo aufnehmen →
+   `--mode clickdelay`, Anleitung in `docs/03-roadmap.md`), dazu einmal über
+   den VPS statt lokal. SFU, 30 Personen und Web ↔ Web ohne Geräte sind
+   gemessen.
+2. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach der Messung mit
+   Geräten.
+3. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
+4. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
+   Code-Signing, Tauri-Updater.
+5. Video: Kamera im nativen Client (Senden und Anzeigen), Schichtwahl im
+   nativen Client (empfängt immer „h“).
+6. Foren: Tags, Sortierung; Beiträge im nativen Client starten.
+7. Ungelesen: Erwähnungs-Zahl pro Kanal, Rollen-Erwähnungen.
 
 ---
 

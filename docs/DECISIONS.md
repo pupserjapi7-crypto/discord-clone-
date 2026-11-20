@@ -4,6 +4,175 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-20 — SFU-Schleife im Stapel, Voice-Last mit echten str0m-Teilnehmern
+
+**Entscheidung:** Der Raum-Thread wartet blockierend auf das erste Paket (bis
+zum nächsten str0m-Timeout), liest dann höchstens 24 weitere ohne Warten,
+leitet alle angefallenen Ereignisse in einem Zug weiter und rückt danach die
+Zeit aller Verbindungen vor, damit str0m die geschriebenen Pakete sofort
+freigibt. Leere Ausgaben kommen nicht mehr in die Warteschlange. Gemessen
+wird mit `nova-loadtest --mode voice`: N echte str0m-Teilnehmer im selben
+Prozess, Zeitstempel im Paket, daher ohne Uhrenabgleich.
+
+**Warum:** Die Schleife stammte aus dem str0m-Beispiel „chat“ und war für
+zwei, drei Personen gedacht. Mit 30 Personen kostete jedes gesendete Paket
+einen Durchlauf über alle Verbindungen; der Socket wurde selten und dann in
+großen Stapeln gelesen, die DTLS-Warteschlange (30 Datensätze) lief über,
+Verbindungen brachen ab. 24 Pakete pro Stapel halten jede Verbindung sicher
+unter der Grenze. Ein synthetischer Lasttest misst den SFU-Anteil genau und
+ist wiederholbar; Mikrofon, Kodierung und Lautsprecher misst das
+Klick-Werkzeug mit echten Geräten.
+
+## 2026-11-20 — `/metrics` nur lokal, `X-Forwarded-For` von rechts
+
+**Entscheidung:** `/metrics` antwortet nur, wenn die Verbindung von Loopback
+kommt **und** (hinter dem Proxy) die weitergereichte Adresse Loopback ist.
+`client_ip` nimmt den letzten Eintrag von `X-Forwarded-For`. `install.sh`
+belegt `NOVA_SFU_PUBLIC_IP` in einer neuen `nova.env` mit der Adresse der
+Standardroute vor und warnt, wenn die Variable fehlt.
+
+**Warum:** Die Architektur sah `/metrics` „nur auf Loopback“ vor, der Proxy
+reichte es aber öffentlich durch. Den ersten Eintrag von `X-Forwarded-For`
+setzt der Client selbst; Apache hängt die echte Adresse hinten an, Caddy
+ersetzt den Header. Die Standardroute braucht keinen externen Dienst (vgl.
+2026-11-13); hinter NAT bleibt Handarbeit, aber niemand installiert mehr
+unbemerkt einen SFU, der 127.0.0.1 ankündigt.
+
+## 2026-11-20 — Ungelesen pro Server: gefilterter Hinweis statt Zähler im Gateway
+
+**Entscheidung:** Das Gateway zählt nichts mit. Nach einer neuen Nachricht
+geht `guild_activity { guild_id }` an die Sessions der Guild, die den Kanal
+sehen und lesen dürfen (Rechte aus dem 30-s-Cache, im Hintergrund geprüft),
+nie an den Autor; pro Kanal höchstens eins pro Sekunde, der Rest der Sekunde
+wird am Fensterende nachgereicht. Erwähnte mit Leserecht bekommen sofort
+`guild_activity { mentioned: true }`. Clients setzen bei einem normalen
+Hinweis den Punkt selbst; nur Erwähnungen, der Verbindungsaufbau, das
+Verlassen eines Servers und der Fensterfokus (höchstens alle 30 s) fragen
+`GET /users/@me/unread[?guild_id=]` (volle Rechteprüfung, Overrides aller
+Kanäle in einer Abfrage).
+
+**Warum:** Ein Hinweis an *alle* Sessions hätte verraten, wann in einem
+versteckten Kanal geschrieben wird. Gefiltert ist der Hinweis zugleich
+genau genug, um ohne REST-Abfrage den Punkt zu setzen: in einem lebhaften
+Server kostet eine Nachricht damit keine Datenbankabfrage pro Leser (gemessen:
+fünf Folgenachrichten → null Abfragen). Die Rechteprüfung trifft fast immer
+den Cache, den das Senden ohnehin füllt. Erwähnungen stehen in der seit 0.1
+vorhandenen Tabelle `message_mentions`; neu ist nur der Index für die Suche
+pro Person (Migration `0006`).
+
+## 2026-11-20 — Foren als Threads, Webhooks mit eigenem Bot-Konto
+
+**Entscheidung:** Ein Forum ist ein Kanal `kind = 3` ohne eigene Nachrichten;
+jeder Beitrag ist ein gewöhnlicher Thread (`kind = 2`, `parent_id` = Forum),
+dessen erste Nachricht im Thread liegt und `root_message_id` ist. Webhooks
+bekommen je ein Bot-Konto (`hook.{id}`) und posten darüber; vom Token wird nur
+der SHA-256 gespeichert, die URL gibt es einmal. Verwalten mit dem
+vorhandenen Bit `MANAGE_WEBHOOKS`.
+
+**Warum:** Threads können schon alles, was ein Beitrag braucht (Antworten,
+Archivieren, Ungelesen, Rechte vom Elternkanal); keine zweite
+Nachrichtentabelle. Ein Konto pro Webhook hält den Nachrichtenpfad
+unverändert (Absender, Bot-Kennzeichen, Gateway-Dispatch) und braucht nur
+die neue Tabelle `webhooks` (Migration `0005`).
+
+## 2026-11-20 — Echtes Simulcast mit Schichtwahl pro Empfänger
+
+**Entscheidung:** Bildschirm und Kamera senden aus dem Browser drei H.264-
+Schichten (`h` voll, `m` ½, `l` ¼; Bitraten aus der Qualitätsstufe). Der SFU
+führt pro Empfänger und Spur eine Wunschschicht (`Layers` in
+`crates/voice-sfu`): gewechselt wird erst am Schlüsselbild der neuen Schicht
+(bis dahin läuft die alte weiter, das Schlüsselbild wird sofort angefordert);
+sendet der Absender die gewünschte Schicht 1,5 s nicht, nimmt der SFU die
+nächstbeste. Empfänger wählen über den DataChannel
+`{"type":"layer","mid":"…","rid":"h|m|l"}`: Bildschirme hoch (ab drei
+gleichzeitig mittel), Kameras mittel (ab fünf Personen klein), dazu die
+Einstellung „Immer hoch“/„Datensparend“. Ohne Wunsch bleibt es bei „h“ –
+genau wie bisher, der native Client ändert sich nicht.
+
+**Warum:** Ersetzt „ein 1080p-Layer“ vom 2026-11-13. Mit Kameras sind acht
+Videospuren pro Raum realistisch; nur mit kleinen Schichten für Kacheln passt
+das in die Upload-Bandbreite des VPS. Gemessen (lokal, zwei Chromium): Kamera
+1280×720 → B empfängt 640×360 (automatisch), 1280×720 (hoch), 320×180
+(datensparend); Bildschirm 1920×1080 in voller Auflösung.
+
+## 2026-11-20 — Rollen der Spuren und Stream-IDs
+
+**Entscheidung:** Der Client schickt mit jedem Neuverhandlungs-Offer
+`"roles": {"<mid>": "screen" | "screen-audio" | "camera"}`. Der SFU vergibt
+danach die Stream-IDs: `u{id}` Mikrofon und Bildschirm (wie bisher),
+`s{id}` Ton der Bildschirmfreigabe, `c{id}` Kamera. Ohne Rolle gilt Ton als
+Mikrofon und Bild als Bildschirm.
+
+**Warum:** Ältere Clients (Web 0.7, nativer Client) erkennen weiter Mikrofon
+und Bildschirm an `u…` und übergehen `s…`/`c…`, statt sie falsch zuzuordnen.
+Der native Client mischt Bildschirm-Ton trotzdem mit (er spielt jede
+Tonspur), nur ohne Sprecher-Ring.
+
+## 2026-11-20 — SFU meldet eigene Beobachtungen
+
+**Entscheidung:** Der SFU schickt über einen Kanal (`Sfu::take_events`), wenn
+eine Videospur ankommt oder wegfällt und wenn eine Verbindung abreißt; die API
+verteilt das als `voice_state_update`. Beendete Spuren (Richtung ohne
+Empfang) räumt der SFU selbst ab.
+
+**Warum:** Vorher kam `screen = true` nur zufällig rechtzeitig an (der Client
+meldete seinen Zustand, bevor der SFU die Spur kannte), und wer per
+ICE-Abbruch herausfiel, blieb für die anderen sichtbar im Raum.
+
+## 2026-11-20 — Uploads: Metadaten filtern statt Bilder neu kodieren
+
+**Entscheidung:** Bilder werden nicht mit `image` neu kodiert (wie in
+`01-architecture.md` §12 geplant), sondern auf Byte-Ebene gefiltert
+(`crates/api/src/media.rs`): EXIF/GPS, XMP, IPTC, Kommentare und PNG-
+Textblöcke fliegen raus, Farbprofile bleiben, die EXIF-Drehung wird als
+minimaler EXIF-Block wieder eingesetzt, Daten hinter dem Bildende werden
+verworfen. Den Typ bestimmen die ersten Bytes; inline gibt es nur JPEG, PNG,
+GIF und WebP bis 16 384 px Kante und 60 MP.
+
+**Warum:** Neu kodieren kostet auf 2 vCores pro Foto 100–300 ms CPU und bis
+zu 100 MB RAM, verschlechtert die Qualität (der reine Rust-Encoder kann nur
+JPEG verlustbehaftet, WebP nur verlustfrei) und bringt die Bild-Codecs als
+Angriffsfläche in den Server. Der Filter streamt, braucht konstant wenig
+Speicher und entfernt, worum es geht: Ortsdaten. Polyglot-Dateien entschärfen
+zusätzlich `X-Content-Type-Options: nosniff`, `Content-Security-Policy:
+default-src 'none'; sandbox` und `Content-Disposition: attachment` für alles,
+was kein Bild ist.
+
+## 2026-11-20 — Uploads: roher Body, Auslieferung durch Axum
+
+**Entscheidung:** `POST …/attachments?filename=` nimmt den rohen Body (kein
+Multipart) und streamt ihn in eine Zwischendatei unter `NOVA_UPLOAD_DIR/tmp`,
+gehasht und gezählt. Ausgeliefert wird durch Axum (`Range`, `ETag`, `304`),
+nicht über `forward_auth` + `file_server` im Reverse-Proxy.
+
+**Warum:** Die Produktion läuft hinter Apache, nicht Caddy; ein Weg für beide
+Proxys. Gestreamt kosten 20 MB im Test 4 MB RAM. Bei unter 500 aktiven
+Nutzern ist die CPU für das Ausliefern vernachlässigbar.
+
+## 2026-11-20 — Nachrichten ohne Text (nur Anhänge)
+
+**Entscheidung:** Migration `0004` ersetzt die Prüfung
+`char_length(content) between 1 and 8000` durch `<= 8000`. Das ist eine
+Lockerung, keine der in `CLAUDE.md` aufgezählten Operationen
+(`add column … default`, Tabellen, Indizes) – aber genauso
+vorwärtskompatibel: ältere Server schreiben weiter nur nicht-leere Texte,
+ältere Clients zeigen leeren Text leer an, nichts wird gelöscht oder
+umbenannt.
+
+**Warum:** Ein Screenshot ohne Kommentar ist der häufigste Upload. Ein
+Platzhaltertext in `content` hätte ältere Clients verwirrt.
+
+## 2026-11-20 — Aufräumen der Blobs mit Sperre statt Zeitfenster
+
+**Entscheidung:** Uploads halten eine Lesesperre (`AppState::blob_gc`) vom
+Ablegen des Blobs bis zur Datenbankzeile; die Bereinigung (alle 15 min) hält
+die Schreibsperre, während sie Verweise prüft und löscht. Verwaiste Uploads
+verschwinden nach 24 h, Blobs ohne Verweis frühestens nach einer Stunde.
+
+**Warum:** Gleiche Inhalte teilen sich einen Blob. Ohne Sperre könnte die
+Bereinigung einen Blob löschen, auf den ein paralleler Upload gerade eine neue
+Zeile anlegt. Ein Prozess, eine Sperre – billiger als Referenzzähler.
+
 ## 2026-11-15 — Streams: H.264 über OpenH264, SFU nur noch H.264 für Video
 
 **Entscheidung:** Der SFU bietet für Video nur noch H.264 Constrained
@@ -152,7 +321,7 @@ Persistenz- und Testpfad ohne funktionalen Mehrwert.
 Chat; Nachrichten und Composer werden unruhig. Die Vorgabe nannte „ca.
 900 px“, die frühere Schwelle ist die robustere Variante.
 
-## 2026-11-13 — Screenshare: ein 1080p-Layer, kein erzwungenes Simulcast
+## 2026-11-13 — Screenshare: ein 1080p-Layer, kein erzwungenes Simulcast (ersetzt 2026-11-20)
 
 **Entscheidung:** Der Sender erzeugt eine 1080p60-Spur; die Leitung wählt die
 Auflösung über `contentHint` und Bitraten-Deckel. Simulcast wird nicht

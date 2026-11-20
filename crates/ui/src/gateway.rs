@@ -31,6 +31,7 @@ enum Command {
         nonce: u64,
         channel_id: i64,
         content: String,
+        attachment_ids: Vec<i64>,
     },
     Edit {
         nonce: u64,
@@ -65,12 +66,19 @@ impl Gateway {
         }
     }
 
-    pub fn send_message(&self, nonce: u64, channel_id: &str, content: String) {
+    pub fn send_message(
+        &self,
+        nonce: u64,
+        channel_id: &str,
+        content: String,
+        attachment_ids: Vec<i64>,
+    ) {
         if let Ok(channel_id) = channel_id.parse() {
             self.command(Command::Send {
                 nonce,
                 channel_id,
                 content,
+                attachment_ids,
             });
         }
     }
@@ -203,6 +211,11 @@ async fn run(token: String, mut store: Store, mut rx: UnboundedReceiver<Command>
                                     last_seq = hello.seq;
                                     heartbeat_ms = (hello.heartbeat_secs.max(5) * 1000).min(30_000);
                                 }
+                                // Neue Session: verpasste `guild_activity` gibt es
+                                // nicht, also den Stand der Server-Leiste holen.
+                                if frame.op == protocol::OP_HELLO_OK {
+                                    spawn(actions::load_unread(store));
+                                }
                                 online = true;
                                 attempt = 0;
                                 store.status.set(ConnStatus::Online);
@@ -233,6 +246,7 @@ async fn run(token: String, mut store: Store, mut rx: UnboundedReceiver<Command>
                             }
                             protocol::OP_RESYNC => {
                                 last_seq = 0;
+                                spawn(actions::load_unread(store));
                                 if let Some(id) = store.channel_id.read().clone() {
                                     spawn(actions::reload_history(store, id));
                                 }
@@ -255,12 +269,12 @@ async fn run(token: String, mut store: Store, mut rx: UnboundedReceiver<Command>
                             channel = Some(id);
                             Some(ClientOp::Subscribe { channel_id: id })
                         }
-                        Some(Command::Send { nonce, channel_id, content }) => Some(ClientOp::MessageCreate {
+                        Some(Command::Send { nonce, channel_id, content, attachment_ids }) => Some(ClientOp::MessageCreate {
                             nonce,
                             channel_id,
                             content,
                             reply_to: None,
-                            attachment_ids: Vec::new(),
+                            attachment_ids,
                         }),
                         Some(Command::Edit { nonce, message_id, content }) => {
                             Some(ClientOp::MessageEdit { nonce, message_id, content })
@@ -370,7 +384,7 @@ fn handle_dispatch(event: Dispatched, mut store: Store) {
             history.messages.push(message.clone());
             drop(histories);
             if visible {
-                spawn(actions::mark_read(channel_id, message.id));
+                spawn(actions::mark_read(store, channel_id, message.id));
             }
         }
         Dispatched::Updated(message) => {
@@ -482,6 +496,10 @@ fn handle_dispatch(event: Dispatched, mut store: Store) {
             }
         }
         Dispatched::Voice(state) => actions::apply_voice_state(store, state),
+        Dispatched::Activity {
+            guild_id,
+            mentioned,
+        } => actions::guild_activity(store, guild_id, mentioned),
         Dispatched::Other => {}
     }
 }

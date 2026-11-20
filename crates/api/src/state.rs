@@ -13,9 +13,9 @@ use nova_common::{config::Config, ids::Snowflake, metrics::Metrics, tokens::Toke
 use nova_db::Db;
 use nova_gateway::Gateway;
 use nova_sfu::Sfu;
-use tokio::sync::Semaphore;
+use tokio::sync::{RwLock, Semaphore};
 
-use crate::error::ApiError;
+use crate::{blob::BlobStore, error::ApiError};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -31,6 +31,13 @@ pub struct AppState {
     /// Bounds concurrent Argon2 work: hashing is memory-hard and must never
     /// starve the gateway/SFU runtimes.
     pub hash_limit: Arc<Semaphore>,
+    /// Ablage der Upload-Bytes (content-addressed).
+    pub blobs: Arc<dyn BlobStore>,
+    /// Uploads halten die Lese-, die Bereinigung die Schreibsperre: so löscht
+    /// sie nie einen Blob, auf den gerade eine neue Zeile entsteht.
+    pub blob_gc: Arc<RwLock<()>>,
+    /// Begrenzt gleichzeitige Bildbearbeitung (Plattenlast, nicht CPU).
+    pub media_limit: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -58,6 +65,7 @@ impl AppState {
                         muted: false,
                         deafened: false,
                         screen: false,
+                        camera: false,
                     },
                 );
             }
@@ -157,14 +165,21 @@ pub fn clear_cookie(name: &str, path: &str) -> HeaderValue {
 }
 
 /// Accepts `X-Forwarded-For` only when Caddy is explicitly trusted.
+///
+/// Hinter dem Proxy zählt der **letzte** Eintrag von `X-Forwarded-For`: den
+/// trägt der Proxy selbst ein (Apache hängt an, Caddy ersetzt). Alles davor
+/// kann der Client frei setzen – bis 0.8 wurde der erste Eintrag genommen,
+/// damit ließen sich die IP-Rate-Limits mit erfundenen Adressen umgehen.
 pub fn client_ip(headers: &HeaderMap, peer: IpAddr, trust_proxy: bool) -> IpAddr {
     if !trust_proxy {
         return peer;
     }
     headers
-        .get("x-forwarded-for")
+        .get_all("x-forwarded-for")
+        .iter()
+        .next_back()
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(',').next())
+        .and_then(|value| value.rsplit(',').next())
         .and_then(|value| value.trim().parse().ok())
         .unwrap_or(peer)
 }
@@ -209,5 +224,30 @@ impl RateLimiter {
         let now = Instant::now();
         self.buckets
             .retain(|_, bucket| now.duration_since(bucket.last) < Duration::from_secs(600));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forwarded_for_uses_the_entry_of_the_proxy() {
+        let peer: IpAddr = "127.0.0.1".parse().expect("ip");
+        let client: IpAddr = "203.0.113.9".parse().expect("ip");
+        let mut headers = HeaderMap::new();
+        // Der Client behauptet 127.0.0.1, der Proxy hängt die echte Adresse an.
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("127.0.0.1, 203.0.113.9"),
+        );
+        assert_eq!(client_ip(&headers, peer, true), client);
+        assert_eq!(client_ip(&headers, peer, false), peer);
+        headers.append("x-forwarded-for", HeaderValue::from_static("198.51.100.4"));
+        assert_eq!(
+            client_ip(&headers, peer, true),
+            "198.51.100.4".parse::<IpAddr>().expect("ip")
+        );
+        assert_eq!(client_ip(&HeaderMap::new(), peer, true), peer);
     }
 }

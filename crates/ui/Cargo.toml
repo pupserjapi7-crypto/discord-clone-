@@ -24,7 +24,9 @@ web-sys = { version = "0.3", features = [
   "BaseAudioContext",
   "Blob",
   "Clipboard",
+  "ClipboardEvent",
   "console",
+  "DataTransfer",
   "Document",
   "DomTokenList",
   "DisplayMediaStreamConstraints",
@@ -57,6 +59,7 @@ web-sys = { version = "0.3", features = [
   "Notification",
   "NotificationOptions",
   "NotificationPermission",
+  "ProgressEvent",
   "RtcConfiguration",
   "RtcDataChannel",
   "RtcDataChannelEvent",
@@ -66,6 +69,9 @@ web-sys = { version = "0.3", features = [
   "RtcIceGatheringState",
   "RtcPeerConnection",
   "RtcRtpSender",
+  "RtcRtpTransceiver",
+  "RtcRtpTransceiverDirection",
+  "RtcRtpTransceiverInit",
   "RtcSdpType",
   "RtcPeerConnectionIceEvent",
   "RtcSessionDescription",
@@ -74,9 +80,13 @@ web-sys = { version = "0.3", features = [
   "RtcTrackEvent",
   "Storage",
   "Window",
+  "XmlHttpRequest",
+  "XmlHttpRequestEventTarget",
+  "XmlHttpRequestUpload",
 ] }
 
 [dev-dependencies]
+chrono.workspace = true
 nova-common = { path = "../common" }
 
 [features]

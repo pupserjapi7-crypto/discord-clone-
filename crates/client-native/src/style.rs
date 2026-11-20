@@ -44,6 +44,8 @@ pub const SPEAKING: Color = color!(0xffc34d);
 pub const ONLINE: Color = color!(0x4fd18b);
 /// `--nv-danger`
 pub const DANGER: Color = color!(0xff6b6b);
+/// `--nv-text-on-danger`: Text auf Rot
+pub const ON_DANGER: Color = color!(0x1b1405);
 /// `--nv-offline`
 pub const OFFLINE: Color = color!(0x5d6779);
 
@@ -230,6 +232,61 @@ pub fn reaction(_: &Theme, status: button::Status, me: bool) -> button::Style {
     }
 }
 
+/// Datei-Zeile und wartender Anhang (wie `.nv-attach-file` im Web).
+pub fn attachment(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: BORDER,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..fill(RAISED)
+    }
+}
+
+/// Fehlgeschlagener Upload: roter Rand.
+pub fn attachment_failed(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: DANGER,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..fill(RAISED)
+    }
+}
+
+/// Platzhalter, solange ein Vorschaubild lädt.
+pub fn image_placeholder(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            radius: 8.0.into(),
+            ..Border::default()
+        },
+        ..fill(RAISED)
+    }
+}
+
+/// Bild als Knopf (Klick speichert): ohne Fläche, beim Überfahren ein Rand.
+pub fn image_button(_: &Theme, status: button::Status) -> button::Style {
+    let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: None,
+        text_color: TEXT,
+        border: Border {
+            color: if hovered {
+                BORDER_STRONG
+            } else {
+                Color::TRANSPARENT
+            },
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
 /// Kleines Etikett: „Live“ in Gelb, „Bot“ neutral in `RAISED_HI`.
 pub fn tag(color: Color) -> container::Style {
     container::Style {
@@ -275,6 +332,32 @@ pub fn unread_dot(_: &Theme) -> container::Style {
             ..Border::default()
         },
         ..fill(TEXT)
+    }
+}
+
+/// Ungelesen-Punkt in der Server-Leiste: 2-px-Ring in Leistenfarbe trennt ihn
+/// vom Server-Symbol (wie `.nv-rail__dot` im Web).
+pub fn rail_dot(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: RAIL,
+            width: 2.0,
+            radius: 999.0.into(),
+        },
+        ..fill(TEXT)
+    }
+}
+
+/// Erwähnungs-Zahl in der Server-Leiste (`.nv-count`, mit Ring).
+pub fn mention_badge(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: RAIL,
+            width: 2.0,
+            radius: 999.0.into(),
+        },
+        text_color: Some(ON_DANGER),
+        ..fill(DANGER)
     }
 }
 
@@ -590,7 +673,10 @@ mod tests {
     fn styles_have_no_shadows() {
         let theme = theme();
         type ContainerStyle = fn(&Theme) -> container::Style;
-        let containers: [(&str, ContainerStyle); 19] = [
+        let containers: [(&str, ContainerStyle); 22] = [
+            ("attachment", attachment),
+            ("attachment_failed", attachment_failed),
+            ("image_placeholder", image_placeholder),
             ("voice_bar", voice_bar),
             ("backdrop", backdrop),
             ("modal", modal),
@@ -627,6 +713,7 @@ mod tests {
         for status in statuses {
             let buttons = [
                 danger_button(&theme, status),
+                image_button(&theme, status),
                 reaction(&theme, status, true),
                 primary(&theme, status),
                 ghost(&theme, status),
@@ -693,6 +780,7 @@ mod tests {
             ("--nv-text-2", MUTED),
             ("--nv-text-3", FAINT),
             ("--nv-text-on-accent", ON_ACCENT),
+            ("--nv-text-on-danger", ON_DANGER),
             ("--nv-accent", ACCENT),
             ("--nv-accent-hover", ACCENT_HOVER),
             ("--nv-accent-soft", ACTIVE),

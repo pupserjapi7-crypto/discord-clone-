@@ -18,7 +18,7 @@ description: Arbeit am Voice- und Screenshare-Pfad von Project Nova – str0m-SF
   `Propagated::MediaData` → `handle_media_data_out` für jeden anderen Client.
 - **Stream-IDs**: ausgehende Spuren tragen als Stream-ID `u{user_id}`. Der Client
   ordnet darüber Audio-/Video-Elemente Personen zu (Lautstärke, Sprecher-Ring).
-- **Limits**: `NOVA_SFU_MAX_USERS` pro Raum; höchstens 8 gleichzeitige
+- **Limits**: `NOVA_VOICE_MAX_USERS` pro Raum (Standard 15); höchstens 8 gleichzeitige
   Videospuren (Screenshare) pro Raum (`MAX_VIDEO_TRACKS`).
 - **Codecs**: `rtc_config()` im SFU erlaubt nur Opus und H.264 Constrained
   Baseline (PT 108, `42e01f`, `packetization-mode=1`). Der native Client nutzt
@@ -29,8 +29,31 @@ description: Arbeit am Voice- und Screenshare-Pfad von Project Nova – str0m-SF
   Dekodier-Thread, Videospur per eigenem Offer über den DataChannel. Testen
   ohne Klicks mit Debug-Build: `NOVA_DEV_VOICE=1` (+ `NOVA_DEV_SHARE=1` bzw.
   `NOVA_DEV_WATCH=1`).
-- **Simulcast**: nur die hohe Schicht (`rid = "h"`) wird weitergeleitet, siehe
-  `docs/DECISIONS.md`.
+- **Rollen**: Offers über den DataChannel tragen `"roles": {"<mid>": "screen" |
+  "screen-audio" | "camera"}`. Stream-IDs nach Rolle: `u{id}` Mikrofon und
+  Bildschirm, `s{id}` Bildschirm-Ton, `c{id}` Kamera (`TrackRole::stream_id`).
+  Nie bestehende Rollen auf andere Präfixe legen – ältere Clients erkennen nur `u`.
+- **Simulcast**: Browser senden `h`/`m`/`l` (`simulcast_encodings` in
+  `crates/ui/src/voice.rs`). Der SFU hält pro Empfänger und Spur `Layers`
+  (Wunsch, aktive Schicht, zuletzt gesehen); Wechsel am Schlüsselbild, Rückfall
+  nach 1,5 s ohne Pakete. Empfänger wählen mit
+  `{"type":"layer","mid":"…","rid":"h|m|l"}` (`apply_layers`). Ohne Wunsch: `h`.
+- **Ereignisse**: Was der SFU selbst bemerkt (Videospur da/weg, Abriss), geht
+  über `Sfu::take_events` → `nova_api::spawn_sfu_events` → `voice_state_update`.
+  Neue Flags in `Participant` immer dort mitschicken.
+- **Kamera**: Web-Client, 720p30 mit Simulcast, eigene Vorschau gespiegelt in
+  `#cslot-{id}`. Der native Client zeigt Kameras (noch) nicht an.
+
+## Testen in der Cloud-Sandbox
+
+- ICE klappt nur, wenn der SFU die Container-IP ankündigt
+  (`NOVA_SFU_PUBLIC_IP=192.0.2.2` o. ä., siehe `/etc/hosts`); `127.0.0.1`
+  scheitert still (Chrome sendet von der Container-IP).
+- Chromium mit `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream`
+  liefert Fake-Mikrofon und -Kamera; mit
+  `--auto-select-desktop-capture-source=Entire screen` auch `getDisplayMedia`.
+- Empfangene Auflösung prüfen: `getStats()` → `inbound-rtp` (`frameWidth`),
+  gesendete Schichten: `outbound-rtp` (`rid`).
 
 ## Client (Web, `crates/ui/src/voice.rs`)
 
@@ -52,12 +75,21 @@ description: Arbeit am Voice- und Screenshare-Pfad von Project Nova – str0m-SF
 
 ## Latenz messen
 
-1. SFU-Weiterleitung: Zeit zwischen `Input::Receive` und `writer.write` loggen
-   (`debug`) bzw. Metrik `sfu_forward_us`. Budget < 5 ms pro Paket.
-2. Ende-zu-Ende: zwei Clients, Click-Track im Sender, Aufnahme beim Empfänger,
+1. SFU-Weiterleitung: Metrik `nova_sfu_forward_*` in `/metrics` (nur lokal:
+   `curl http://127.0.0.1:8080/metrics`), gemessen von `network_time` des
+   Pakets bis `writer.write`. Budget < 5 ms pro Paket. Last dazu:
+   `nova seed --users 30` und `nova-loadtest --mode voice --users 30 --guild
+   <id> --server-pid <pid>` (echte str0m-Verbindungen, Laufzeit durch den SFU,
+   Verlust, CPU/RAM). **Nur Release-Builds messen** – im Debug-Build schafft
+   der SFU keine 30 Personen. Für mehr als 15 Personen pro Raum
+   `NOVA_VOICE_MAX_USERS` setzen.
+2. Der Raum-Thread muss im Leerlauf schlafen: `top -H -p <pid>` zeigt
+   `sfu-<kanal>` bei ~0 %. (Bis 0.8 lief er wegen eines nicht blockierenden
+   Sockets dauerhaft auf 100 %.)
+3. Ende-zu-Ende: zwei Clients, Click-Track im Sender, Aufnahme beim Empfänger,
    Kreuzkorrelation. Budget < 100 ms. Ergebnis mit Datum in
    `docs/03-roadmap.md` eintragen – nie schätzen.
-3. Was in der Automation nicht geht (echtes Mikrofon, `getDisplayMedia`), in
+4. Was in der Automation nicht geht (echtes Mikrofon, `getDisplayMedia`), in
    `STATUS.md` als „nicht gemessen“ führen.
 
 ## Checkliste

@@ -26,17 +26,38 @@ pub fn VoiceStage(channel: Channel) -> Element {
         .map(|c| c.id == channel.id)
         .unwrap_or(false);
     let can_connect = store.can(perm::CONNECT);
+    let me = store.me_id();
+    // Wessen Kamerabild gerade zu sehen ist (fremde, sobald es ankam; die
+    // eigene Vorschau, solange die Kamera läuft).
+    let cameras: Vec<String> = people
+        .iter()
+        .filter(|p| {
+            p.camera && voice_state.camera_users.contains(&p.user_id)
+                || (here && voice_state.camera && me.as_deref() == Some(p.user_id.as_str()))
+        })
+        .map(|p| p.user_id.clone())
+        .collect();
     let streamers: Vec<VoiceParticipant> = people
         .iter()
         .filter(|p| p.screen && voice_state.video_users.contains(&p.user_id))
         .cloned()
         .collect();
 
-    // Videos in ihre Kacheln hängen, sobald sie gerendert sind.
+    // Videos in ihre Kacheln hängen, sobald sie gerendert sind – nach jeder
+    // Änderung von Voice-Zustand oder Teilnehmerliste, weil Dioxus dabei
+    // Kacheln neu anlegen kann (die Video-Elemente hängen wir selbst ein).
     let mount: Vec<String> = streamers.iter().map(|p| p.user_id.clone()).collect();
-    use_effect(use_reactive!(|mount| {
+    let mount_cameras = cameras.clone();
+    use_effect(use_reactive!(|mount, mount_cameras| {
+        let _ = (
+            store.voice.read().video_users.len(),
+            store.voice_rooms.read().len(),
+        );
         for user in &mount {
             voice::mount_video(user);
+        }
+        for user in &mount_cameras {
+            voice::mount_camera(user);
         }
     }));
 
@@ -84,10 +105,13 @@ pub fn VoiceStage(channel: Channel) -> Element {
     let tile = |index: usize, person: &VoiceParticipant, feature: bool| {
         let speaking = voice_state.speaking.contains(&person.user_id);
         let has_video = feature;
+        // Kamera nur in der Personen-Kachel, nicht in der Bildschirm-Kachel.
+        let has_camera = !feature && cameras.contains(&person.user_id);
+        let is_me = me.as_deref() == Some(person.user_id.as_str());
         rsx! {
             div {
                 key: "{person.user_id}-{feature}",
-                class: classes(&["nv-tile", if feature { "nv-tile--feature" } else { "" }, if speaking { "is-speaking" } else { "" }]),
+                class: classes(&["nv-tile", if feature { "nv-tile--feature" } else { "" }, if has_camera { "nv-tile--camera" } else { "" }, if speaking { "is-speaking" } else { "" }]),
                 style: "--i: {index}",
                 if has_video {
                     span { class: "nv-tile__wait",
@@ -95,6 +119,12 @@ pub fn VoiceStage(channel: Channel) -> Element {
                         "Bildschirm von {person.display_name} wird geladen …"
                     }
                     div { class: "nv-tile__slot", id: "vslot-{person.user_id}" }
+                } else if has_camera {
+                    div {
+                        class: "nv-tile__slot",
+                        id: "cslot-{person.user_id}",
+                        "data-me": if is_me { "true" } else { "false" },
+                    }
                 } else {
                     Avatar { name: person.display_name.clone(), size: 72, speaking }
                 }
@@ -205,6 +235,17 @@ pub fn VoiceDock() -> Element {
                 disabled: !state.joined,
                 onclick: move |_| { spawn(actions::toggle_deafen(store)); },
                 Icon { name: if state.deafened { "headphones-off" } else { "headphones" }, size: 20 }
+            }
+            if can_stream {
+                button {
+                    class: classes(&["nv-iconbtn", "nv-iconbtn--lg", if state.camera { "is-on" } else { "" }]),
+                    "aria-label": if state.camera { "Kamera ausschalten" } else { "Kamera einschalten" },
+                    title: if state.camera { "Kamera ausschalten" } else { "Kamera einschalten" },
+                    "aria-pressed": if state.camera { "true" } else { "false" },
+                    disabled: !state.joined,
+                    onclick: move |_| { spawn(actions::toggle_camera(store)); },
+                    Icon { name: "video", size: 20 }
+                }
             }
             if can_stream {
                 button {

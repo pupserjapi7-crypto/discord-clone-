@@ -1,15 +1,20 @@
 //! Abläufe, die Views auslösen: laden, senden, moderieren, Voice.
 //! Alles hier schreibt nur in den `Store`; Views lesen daraus.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
-use dioxus::prelude::*;
+use dioxus::{core::spawn_forever, prelude::*};
+use gloo_timers::future::TimeoutFuture;
 
 use crate::{
     api,
     gateway::Gateway,
     protocol::VoiceState,
-    store::{ConnStatus, Overlay, Store},
+    store::{ConnStatus, Overlay, PendingUpload, Store, UploadState},
     types::*,
     voice,
 };
@@ -59,6 +64,7 @@ pub async fn logout(mut store: Store) {
     store.history.write().clear();
     store.voice.set(Default::default());
     store.voice_rooms.write().clear();
+    store.guild_unread.write().clear();
     store.status.set(ConnStatus::Offline);
     store.overlay.set(Overlay::None);
 }
@@ -102,6 +108,17 @@ pub async fn load_guilds(mut store: Store) {
 }
 
 pub async fn open_guild(mut store: Store, guild_id: String) {
+    // Solange ein Server offen ist, pflegt die Leiste seinen Punkt nicht;
+    // beim Verlassen deshalb einmal nachfragen.
+    let previous = store
+        .detail
+        .read()
+        .as_ref()
+        .map(|detail| detail.guild.id.clone())
+        .filter(|id| *id != guild_id);
+    if let Some(previous) = previous {
+        spawn_forever(refresh_unread(store, previous));
+    }
     store.guild_loading.set(true);
     store.thread_id.set(None);
     store.pins.set(None);
@@ -177,8 +194,9 @@ pub async fn open_channel(mut store: Store, channel_id: String) {
     if let Some(gateway) = store.gateway.read().clone() {
         gateway.subscribe(&channel_id);
     }
-    let is_voice = channel.map(|c| c.kind == KIND_VOICE).unwrap_or(false);
-    if !is_voice {
+    // Sprachkanäle und Foren haben keinen Nachrichtenverlauf.
+    let has_history = channel.is_none_or(|c| c.kind != KIND_VOICE && c.kind != KIND_FORUM);
+    if has_history {
         load_history(store, channel_id).await;
     }
 }
@@ -237,7 +255,7 @@ async fn load_history(mut store: Store, channel_id: String) {
             history.complete = complete;
             drop(histories);
             if let Some(last) = last {
-                mark_read(channel_id.clone(), last.clone()).await;
+                mark_read(store, channel_id.clone(), last.clone()).await;
                 if let Some(detail) = store.detail.write().as_mut()
                     && let Some(unread) = detail
                         .unread
@@ -291,13 +309,131 @@ pub async fn load_older(mut store: Store, channel_id: String) {
     }
 }
 
-pub async fn mark_read(channel_id: String, message_id: String) {
-    let _ = api::ack(&channel_id, &message_id).await;
+pub async fn mark_read(store: Store, channel_id: String, message_id: String) {
+    if api::ack(&channel_id, &message_id).await.is_err() {
+        return;
+    }
+    // Erwähnungen im offenen Server sind vielleicht gerade gelesen worden.
+    let open = store
+        .detail
+        .read()
+        .as_ref()
+        .map(|detail| detail.guild.id.clone());
+    if let Some(guild_id) = open {
+        let mentioned = store
+            .guild_unread
+            .read()
+            .get(&guild_id)
+            .is_some_and(|state| state.mentions > 0);
+        if mentioned {
+            schedule_unread(store, guild_id);
+        }
+    }
 }
 
-pub fn send_message(mut store: Store, channel_id: String, content: String) {
+// ------------------------------------------------- Ungelesen pro Server
+
+thread_local! {
+    /// Server, deren Stand gleich (entprellt) neu geholt wird.
+    static UNREAD_PENDING: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Zeitpunkt (ms) der letzten Komplett-Abfrage, gegen Fokus-Gewitter.
+    static UNREAD_LOADED_MS: Cell<f64> = const { Cell::new(0.0) };
+}
+
+/// Wartezeit nach einem Anstoß: eine Serie von Nachrichten ergibt eine Anfrage.
+const UNREAD_DEBOUNCE_MS: u32 = 1_500;
+
+/// Stand aller Server holen (neue Gateway-Session, Fenster wieder im Fokus).
+pub async fn load_unread(mut store: Store) {
+    UNREAD_LOADED_MS.with(|at| at.set(js_sys::Date::now()));
+    if let Ok(list) = api::unread(None).await {
+        store.guild_unread.set(
+            list.into_iter()
+                .map(|state| (state.guild_id.clone(), state))
+                .collect(),
+        );
+    }
+}
+
+/// Wie [`load_unread`], aber höchstens alle 30 s (Fokuswechsel).
+pub fn load_unread_throttled(store: Store) {
+    let last = UNREAD_LOADED_MS.with(Cell::get);
+    if js_sys::Date::now() - last >= 30_000.0 {
+        spawn_forever(load_unread(store));
+    }
+}
+
+async fn refresh_unread(mut store: Store, guild_id: String) {
+    let Ok(list) = api::unread(Some(&guild_id)).await else {
+        // Der nächste Anstoß versucht es wieder.
+        return;
+    };
+    let mut map = store.guild_unread.write();
+    match list.into_iter().find(|state| state.guild_id == guild_id) {
+        Some(state) => {
+            map.insert(guild_id, state);
+        }
+        None => {
+            map.remove(&guild_id);
+        }
+    }
+}
+
+/// Einen Server entprellt neu abfragen.
+fn schedule_unread(store: Store, guild_id: String) {
+    let fresh = UNREAD_PENDING.with(|pending| pending.borrow_mut().insert(guild_id.clone()));
+    if !fresh {
+        return;
+    }
+    // `spawn_forever`: der Abruf gehört keiner Komponente.
+    spawn_forever(async move {
+        TimeoutFuture::new(UNREAD_DEBOUNCE_MS).await;
+        UNREAD_PENDING.with(|pending| pending.borrow_mut().remove(&guild_id));
+        refresh_unread(store, guild_id).await;
+    });
+}
+
+/// `guild_activity` kommt nur, wenn man den Kanal lesen darf und die
+/// Nachricht nicht von einem selbst ist: der Punkt lässt sich ohne Nachfrage
+/// setzen. Nur für die Erwähnungs-Zahl fragt der Client den Server.
+pub fn guild_activity(mut store: Store, guild_id: String, mentioned: bool) {
+    if mentioned {
+        schedule_unread(store, guild_id);
+        return;
+    }
+    // Im offenen Server zeigt die Kanalliste, was neu ist; beim Verlassen
+    // fragt `open_guild` den Stand ab.
+    let open = store
+        .detail
+        .read()
+        .as_ref()
+        .is_some_and(|detail| detail.guild.id == guild_id);
+    let marked = store
+        .guild_unread
+        .read()
+        .get(&guild_id)
+        .is_some_and(|state| state.unread);
+    if !open && !marked {
+        store
+            .guild_unread
+            .write()
+            .entry(guild_id.clone())
+            .or_insert_with(|| GuildUnread {
+                guild_id,
+                ..GuildUnread::default()
+            })
+            .unread = true;
+    }
+}
+
+pub fn send_message(
+    mut store: Store,
+    channel_id: String,
+    content: String,
+    attachments: Vec<Attachment>,
+) {
     let content = content.trim().to_owned();
-    if content.is_empty() {
+    if content.is_empty() && attachments.is_empty() {
         return;
     }
     let Some(user) = store.user.read().clone() else {
@@ -310,6 +446,10 @@ pub fn send_message(mut store: Store, channel_id: String, content: String) {
         return;
     };
     let nonce = next_nonce();
+    let attachment_ids = attachments
+        .iter()
+        .filter_map(|attachment| attachment.id.parse().ok())
+        .collect();
     store
         .history
         .write()
@@ -322,15 +462,16 @@ pub fn send_message(mut store: Store, channel_id: String, content: String) {
             author: user,
             content: content.clone(),
             created_at: now_string(),
+            attachments,
             nonce: Some(nonce),
             ..Default::default()
         });
-    gateway.send_message(nonce, &channel_id, content);
+    gateway.send_message(nonce, &channel_id, content, attachment_ids);
 }
 
 /// Fehlgeschlagene Nachricht erneut senden.
 pub fn retry_message(mut store: Store, channel_id: String, local_id: String) {
-    let content = {
+    let message = {
         let mut histories = store.history.write();
         let Some(history) = histories.get_mut(&channel_id) else {
             return;
@@ -338,9 +479,93 @@ pub fn retry_message(mut store: Store, channel_id: String, local_id: String) {
         let Some(pos) = history.messages.iter().position(|m| m.id == local_id) else {
             return;
         };
-        history.messages.remove(pos).content
+        history.messages.remove(pos)
     };
-    send_message(store, channel_id, content);
+    send_message(store, channel_id, message.content, message.attachments);
+}
+
+/// Höchstens so viele Anhänge pro Nachricht (wie der Server).
+pub const MAX_ATTACHMENTS: usize = 10;
+
+/// Dateien hochladen und im Composer des Kanals anzeigen. Läuft unabhängig
+/// von der Komponente weiter (Kanalwechsel bricht den Upload nicht ab).
+pub fn attach_files(mut store: Store, channel_id: String, files: Vec<web_sys::File>) {
+    for file in files {
+        let count = store.uploads.read().get(&channel_id).map_or(0, Vec::len);
+        if count >= MAX_ATTACHMENTS {
+            store.error("Höchstens 10 Anhänge pro Nachricht.");
+            break;
+        }
+        let key = next_nonce();
+        let name = file.name();
+        store
+            .uploads
+            .write()
+            .entry(channel_id.clone())
+            .or_default()
+            .push(PendingUpload {
+                key,
+                name: name.clone(),
+                size: file.size() as i64,
+                progress: 0.0,
+                state: UploadState::Uploading,
+            });
+        let channel = channel_id.clone();
+        spawn_forever(async move {
+            let progress_channel = channel.clone();
+            let result = api::upload(&channel, &file, move |value| {
+                let mut uploads = store.uploads.write();
+                if let Some(item) = uploads
+                    .get_mut(&progress_channel)
+                    .and_then(|list| list.iter_mut().find(|item| item.key == key))
+                    && (value - item.progress >= 0.02 || value >= 1.0)
+                {
+                    item.progress = value;
+                }
+            })
+            .await;
+            let mut uploads = store.uploads.write();
+            let item = uploads
+                .get_mut(&channel)
+                .and_then(|list| list.iter_mut().find(|item| item.key == key));
+            match (item, result) {
+                (Some(item), Ok(attachment)) => {
+                    item.progress = 1.0;
+                    item.state = UploadState::Done(attachment);
+                }
+                (Some(item), Err(err)) => {
+                    item.state = UploadState::Failed(err.clone());
+                    drop(uploads);
+                    store.error(format!("{name}: {err}"));
+                }
+                // Inzwischen entfernt: Upload gleich wieder verwerfen.
+                (None, Ok(attachment)) => {
+                    drop(uploads);
+                    let _ = api::discard_attachment(&attachment.id).await;
+                }
+                (None, Err(_)) => {}
+            }
+        });
+    }
+}
+
+/// Anhang aus dem Composer entfernen; fertige Uploads verwirft der Server.
+pub fn remove_upload(mut store: Store, channel_id: &str, key: u64) {
+    let removed = {
+        let mut uploads = store.uploads.write();
+        let Some(list) = uploads.get_mut(channel_id) else {
+            return;
+        };
+        let Some(pos) = list.iter().position(|item| item.key == key) else {
+            return;
+        };
+        list.remove(pos)
+    };
+    if let UploadState::Done(attachment) = removed.state {
+        spawn_forever(async move {
+            let _ = api::discard_attachment(&attachment.id).await;
+        });
+    }
 }
 
 pub async fn load_pins(mut store: Store) {
@@ -384,22 +609,35 @@ pub fn apply_voice_state(mut store: Store, state: VoiceState) {
         .and_then(|detail| detail.member(&state.user_id).cloned());
     {
         let mut rooms = store.voice_rooms.write();
-        for list in rooms.values_mut() {
-            list.retain(|p| p.user_id != state.user_id);
+        // In anderen Kanälen entfernen; im eigenen an Ort und Stelle
+        // aktualisieren, damit die Kacheln nicht springen.
+        for (channel_id, list) in rooms.iter_mut() {
+            if !state.connected || *channel_id != state.channel_id {
+                list.retain(|p| p.user_id != state.user_id);
+            }
         }
         if state.connected {
-            let member = name.unwrap_or_default();
-            rooms
-                .entry(state.channel_id.clone())
-                .or_default()
-                .push(VoiceParticipant {
-                    user_id: state.user_id.clone(),
-                    handle: member.handle,
-                    display_name: member.display_name,
-                    muted: state.muted,
-                    screen: state.screen,
-                    deafened: state.deafened,
-                });
+            let list = rooms.entry(state.channel_id.clone()).or_default();
+            match list.iter_mut().find(|p| p.user_id == state.user_id) {
+                Some(existing) => {
+                    existing.muted = state.muted;
+                    existing.screen = state.screen;
+                    existing.deafened = state.deafened;
+                    existing.camera = state.camera;
+                }
+                None => {
+                    let member = name.unwrap_or_default();
+                    list.push(VoiceParticipant {
+                        user_id: state.user_id.clone(),
+                        handle: member.handle,
+                        display_name: member.display_name,
+                        muted: state.muted,
+                        screen: state.screen,
+                        deafened: state.deafened,
+                        camera: state.camera,
+                    });
+                }
+            }
         }
         rooms.retain(|_, list| !list.is_empty());
     }
@@ -409,6 +647,14 @@ pub fn apply_voice_state(mut store: Store, state: VoiceState) {
             .voice
             .write()
             .video_users
+            .retain(|id| id != &state.user_id);
+    }
+    if !state.connected || !state.camera {
+        voice::drop_remote_camera(&state.user_id);
+        store
+            .voice
+            .write()
+            .camera_users
             .retain(|id| id != &state.user_id);
     }
     if !state.connected {
@@ -446,6 +692,7 @@ pub async fn join_voice(mut store: Store, channel: Channel) {
                 voice.muted = settings.push_to_talk;
                 voice.deafened = false;
                 voice.screen = false;
+                voice.camera = false;
             }
             if settings.push_to_talk {
                 voice::set_muted(true);
@@ -481,17 +728,18 @@ pub async fn leave_voice(mut store: Store) {
 }
 
 pub async fn report_voice_state(store: Store) {
-    let (channel, muted, deafened, screen) = {
+    let (channel, muted, deafened, screen, camera) = {
         let voice = store.voice.read();
         (
             voice.channel.clone(),
             voice.muted,
             voice.deafened,
             voice.screen,
+            voice.camera,
         )
     };
     if let Some(channel) = channel {
-        let _ = api::voice_state(&channel.id, muted, deafened, screen).await;
+        let _ = api::voice_state(&channel.id, muted, deafened, screen, camera).await;
     }
 }
 
@@ -525,8 +773,27 @@ pub async fn toggle_screen(mut store: Store) {
         voice::stop_screen();
         store.voice.write().screen = false;
     } else {
-        match voice::start_screen(store).await {
+        let settings = store.settings.read().clone();
+        match voice::start_screen(store, &settings).await {
             Ok(()) => store.voice.write().screen = true,
+            Err(err) => {
+                store.error(err);
+                return;
+            }
+        }
+    }
+    report_voice_state(store).await;
+}
+
+pub async fn toggle_camera(mut store: Store) {
+    let on = store.voice.read().camera;
+    if on {
+        voice::stop_camera();
+        store.voice.write().camera = false;
+    } else {
+        let settings = store.settings.read().clone();
+        match voice::start_camera(store, &settings).await {
+            Ok(()) => store.voice.write().camera = true,
             Err(err) => {
                 store.error(err);
                 return;

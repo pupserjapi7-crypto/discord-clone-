@@ -18,3 +18,4 @@
 # Lokale Vorschau-Konfiguration (Pfade/Ports dieser Maschine)
 /.claude/launch.json
 /.claude/settings.local.json
+/desktop/src-tauri/gen/

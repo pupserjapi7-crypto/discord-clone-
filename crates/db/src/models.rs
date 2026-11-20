@@ -33,7 +33,8 @@ pub struct Role {
     pub is_everyone: bool,
 }
 
-/// `kind`: 0 Text, 1 Sprache, 2 Thread (mit `parent_id` und `root_message_id`).
+/// `kind`: 0 Text, 1 Sprache, 2 Thread (mit `parent_id` und `root_message_id`),
+/// 3 Forum (ab v0.8; Beiträge sind Threads mit `parent_id` = Forum).
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct Channel {
     pub id: i64,
@@ -52,6 +53,8 @@ pub struct Channel {
 pub const CHANNEL_TEXT: i16 = 0;
 pub const CHANNEL_VOICE: i16 = 1;
 pub const CHANNEL_THREAD: i16 = 2;
+/// Forum: enthält keine Nachrichten, nur Beiträge (Threads mit Startnachricht).
+pub const CHANNEL_FORUM: i16 = 3;
 
 #[derive(Debug, Clone, FromRow)]
 pub struct MessageRow {
@@ -83,6 +86,9 @@ pub struct Attachment {
     pub id: i64,
     pub channel_id: Option<i64>,
     pub message_id: Option<i64>,
+    /// Direktnachricht statt Server-Kanal (ab v0.8).
+    pub dm_id: Option<i64>,
+    pub dm_message_id: Option<i64>,
     pub uploader_id: i64,
     pub filename: String,
     pub content_type: String,

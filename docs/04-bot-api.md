@@ -50,14 +50,79 @@ bei Menschen: Rollen, Kanal-Overrides, Timeouts.
 |---|---|---|
 | `GET` | `/api/v1/guilds` | – |
 | `GET` | `/api/v1/guilds/{id}` | Mitglied |
+| `GET` | `/api/v1/users/@me/unread?guild_id=` | – (nur eigene Server, nur sichtbare Kanäle) |
 | `GET` | `/api/v1/channels/{id}/messages?before=&limit=` | `READ_MESSAGE_HISTORY` |
-| `POST` | `/api/v1/channels/{id}/messages` `{content, reply_to?}` | `SEND_MESSAGES` |
+| `POST` | `/api/v1/channels/{id}/messages` `{content, reply_to?, attachment_ids?}` | `SEND_MESSAGES` (+ `ATTACH_FILES` mit Anhängen) |
+| `POST` | `/api/v1/channels/{id}/attachments?filename=` (roher Body) | `SEND_MESSAGES` + `ATTACH_FILES` |
+| `GET` | `/api/v1/attachments/{id}` (`?download=1`, `Range`) | Kanal sichtbar + `READ_MESSAGE_HISTORY` |
+| `DELETE` | `/api/v1/attachments/{id}` | eigener, noch nicht gesendeter Upload |
 | `DELETE` | `/api/v1/channels/{id}/messages/{msg}` | eigene oder `MANAGE_MESSAGES` |
 | `PUT`/`DELETE` | `/api/v1/channels/{id}/pins/{msg}` | `MANAGE_MESSAGES` |
+| `GET` | `/api/v1/channels/{id}/overrides` | `MANAGE_ROLES` + `MANAGE_CHANNELS` |
+| `PUT`/`DELETE` | `/api/v1/channels/{id}/overrides/{role\|member}/{target}` `{allow, deny}` | `MANAGE_ROLES` + `MANAGE_CHANNELS` |
+| `GET` | `/api/v1/channels/{forum}/posts` | `READ_MESSAGE_HISTORY` |
+| `POST` | `/api/v1/channels/{forum}/posts` `{title, content, attachment_ids?}` | `SEND_MESSAGES` |
+| `GET`/`POST` | `/api/v1/channels/{id}/webhooks` `{name}` | `MANAGE_WEBHOOKS` (Anlegen nur Menschen) |
+| `DELETE` | `/api/v1/webhooks/{id}` | `MANAGE_WEBHOOKS` |
 | `POST` | `/api/v1/channels/{id}/messages/{msg}/threads` `{name}` | `CREATE_THREADS` |
 | `POST` | `/api/v1/guilds/{id}/members/{user}/kick` | `KICK_MEMBERS` + Hierarchie |
 | `PUT` | `/api/v1/guilds/{id}/members/{user}/timeout` `{seconds}` | `TIMEOUT_MEMBERS` + Hierarchie |
 | `PUT`/`DELETE` | `/api/v1/guilds/{id}/bans/{user}` | `BAN_MEMBERS` + Hierarchie |
+
+### Foren (ab 0.8)
+
+Ein Forum ist ein Kanal mit `kind = 3`. Er hat keine eigenen Nachrichten
+(`POST …/messages` liefert `400`); jeder Beitrag ist ein Thread (`kind = 2`,
+`parent_id` = Forum) mit seiner ersten Nachricht. Antworten gehen wie in jedem
+Thread an `POST /api/v1/channels/{thread}/messages`. Anhänge für den ersten
+Beitrag lädt man in das Forum hoch und nennt sie in `attachment_ids`.
+
+### Webhooks (ab 0.8)
+
+Externe Dienste posten ohne Konto in einen Textkanal:
+
+```bash
+curl -X POST "https://<server>/api/v1/webhooks/<id>/<token>" \
+  -H "Content-Type: application/json" -d '{"content":"Build #42 ist grün"}'
+```
+
+Die URL gibt es nur einmal beim Anlegen (in der Web-App unter
+Server-Einstellungen → Kanäle → Bearbeiten); gespeichert ist nur der
+SHA-256 des Tokens. Absender ist ein eigenes Bot-Konto mit dem Namen des
+Webhooks. 30 Nachrichten Burst, danach eine alle zwei Sekunden (`429`).
+Falsche ID oder falsches Token: `404`. Achtung: Reverse-Proxys protokollieren
+URLs – das Token steht im Pfad.
+
+### Anhänge (ab 0.8)
+
+Zwei Schritte: erst hochladen, dann mit der Nachricht senden.
+
+```bash
+# 1. Datei als rohen Body hochladen (kein Multipart). Antwort: AttachmentView.
+curl -X POST "https://<server>/api/v1/channels/<kanal>/attachments?filename=bericht.pdf" \
+  -H "Authorization: Bot nb_…" --data-binary @bericht.pdf
+# → {"id":"…","filename":"bericht.pdf","content_type":"application/pdf","size":88400,
+#    "width":null,"height":null,"url":"https://<server>/api/v1/attachments/…"}
+
+# 2. Nachricht mit Anhang senden; `content` darf dann leer sein.
+curl -X POST "https://<server>/api/v1/channels/<kanal>/messages" \
+  -H "Authorization: Bot nb_…" -H "Content-Type: application/json" \
+  -d '{"content":"Wochenbericht","attachment_ids":["…"]}'
+```
+
+- Den Typ bestimmt der Server aus den ersten Bytes, nie aus `Content-Type`.
+  Inline (mit `width`/`height`) erscheinen nur JPEG, PNG, GIF und WebP; alles
+  andere – auch SVG – wird als Download (`Content-Disposition: attachment`)
+  ausgeliefert.
+- Bilder verlieren EXIF/GPS, XMP, IPTC und Textblöcke; die Drehung bleibt.
+- Limits: `NOVA_MAX_UPLOAD_BYTES` (Standard 25 MB, sonst `413 too_large`),
+  `NOVA_GUILD_UPLOAD_QUOTA_BYTES` pro Server (2 GB, sonst `413
+  quota_exceeded`), `NOVA_UPLOADS_PER_MINUTE` pro Konto (20, sonst `429`).
+- Höchstens 10 Anhänge pro Nachricht; jeder Upload gehört genau einer
+  Nachricht im selben Kanal. Nicht gesendete Uploads löscht der Server nach
+  24 Stunden.
+- Im Gateway trägt `message_create` dieselben IDs in `attachment_ids`
+  (Zahlen oder Strings).
 
 ## 4. Rate-Limits
 
@@ -103,11 +168,28 @@ Server-Typen.
 | `guild_member_remove` | `guild_id`, `user_id` | 0.4 |
 | `guild_member_update` | `guild_id`, `user_id`, `timeout_until` | 0.4 |
 | `message_pin` | `channel_id`, `message_id`, `pinned` | 0.4 |
-| `voice_state_update` | `guild_id`, `channel_id`, `user_id`, `connected`, `muted`, `deafened`, `screen` | 0.4 |
+| `voice_state_update` | `guild_id`, `channel_id`, `user_id`, `connected`, `muted`, `deafened`, `screen`, `camera` (ab 0.8) | 0.4 |
 | `dm_message_create` | `message` (`channel_id` = DM-Kanal) – nur an beide Beteiligten; Bots haben keine DMs | 0.6 |
+| `guild_activity` | `guild_id`, `mentioned` – „hier gibt es Neues für dich“, ohne Kanal; Stand per `GET /users/@me/unread` | 0.8 |
 
 Unbekannte Events müssen ignoriert werden – der Server fügt neue hinzu, ohne
 die Protokollversion zu ändern.
+
+`guild_activity` kommt nach neuen Nachrichten an alle Sessions, die den Kanal
+sehen und seinen Verlauf lesen dürfen – nie an den Autor selbst. Pro Kanal
+höchstens eins pro Sekunde; was innerhalb der Sekunde passiert, wird am Ende
+nachgereicht. Es nennt keinen Kanal (Clients brauchen ihn für die
+Server-Leiste nicht). Mit `mentioned: true` geht es sofort und nur an
+Erwähnte (`@handle` im Text). Den genauen Stand liefert
+`GET /api/v1/users/@me/unread` (optional `?guild_id=`):
+
+```json
+[{"guild_id":"…","unread":true,"mentions":2}]
+```
+
+`unread` heißt: mindestens ein sichtbarer Text-/Thread-Kanal hat Nachrichten
+nach dem eigenen Lesestand; `mentions` zählt ungelesene Erwähnungen. Eigene
+Nachrichten setzen den Lesestand mit, Selbst-Erwähnungen zählen nicht.
 
 ## 6. Beispiel ausführen
 

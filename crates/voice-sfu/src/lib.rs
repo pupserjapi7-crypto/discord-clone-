@@ -20,7 +20,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nova_common::protocol::UserPublic;
+use nova_common::{
+    metrics::{Histogram, HistogramSnapshot},
+    protocol::UserPublic,
+};
 use serde::Serialize;
 use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,
@@ -52,8 +55,8 @@ impl fmt::Display for VoiceError {
 
 impl std::error::Error for VoiceError {}
 
-/// Höchstens so viele gleichzeitige Videospuren (Screenshares) pro Raum. Mehr
-/// würde auf dem 2-vCore-VPS die Upload-Bandbreite sprengen.
+/// Höchstens so viele gleichzeitige Videospuren (Bildschirme und Kameras) pro
+/// Raum. Mehr würde auf dem 2-vCore-VPS die Upload-Bandbreite sprengen.
 pub const MAX_VIDEO_TRACKS: usize = 8;
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +67,180 @@ pub struct Participant {
     pub muted: bool,
     pub screen: bool,
     pub deafened: bool,
+    /// Kamera läuft (ab v0.8).
+    pub camera: bool,
+}
+
+/// Wofür eine eingehende Spur steht. Bestimmt die Stream-ID beim
+/// Weiterleiten: `u{id}` für Mikrofon und Bildschirm (wie vor v0.8, damit
+/// ältere Clients weiter funktionieren), `s{id}` für den Ton der
+/// Bildschirmfreigabe, `c{id}` für die Kamera.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackRole {
+    Mic,
+    Screen,
+    ScreenAudio,
+    Camera,
+}
+
+impl TrackRole {
+    /// Name im DataChannel-Offer (`"roles": {"<mid>": "camera"}`).
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "mic" => Some(Self::Mic),
+            "screen" => Some(Self::Screen),
+            "screen-audio" => Some(Self::ScreenAudio),
+            "camera" => Some(Self::Camera),
+            _ => None,
+        }
+    }
+
+    /// Ohne Angabe (Clients vor v0.8): Ton ist Mikrofon, Bild ist Bildschirm.
+    fn default_for(kind: MediaKind) -> Self {
+        match kind {
+            MediaKind::Audio => Self::Mic,
+            MediaKind::Video => Self::Screen,
+        }
+    }
+
+    fn fits(self, kind: MediaKind) -> bool {
+        match self {
+            Self::Mic | Self::ScreenAudio => kind == MediaKind::Audio,
+            Self::Screen | Self::Camera => kind == MediaKind::Video,
+        }
+    }
+
+    pub fn stream_id(self, user_id: i64) -> String {
+        match self {
+            Self::Mic | Self::Screen => format!("u{user_id}"),
+            Self::ScreenAudio => format!("s{user_id}"),
+            Self::Camera => format!("c{user_id}"),
+        }
+    }
+}
+
+/// Simulcast-Schichten, die Browser senden: hoch, mittel, niedrig.
+pub const LAYERS: [&str; 3] = ["h", "m", "l"];
+/// Eine Schicht gilt als ausgefallen, wenn so lange nichts von ihr kam.
+const LAYER_STALE: Duration = Duration::from_millis(1500);
+
+/// Schichtwahl einer weitergeleiteten Videospur für **einen** Empfänger.
+///
+/// Gewechselt wird nur an einem Schlüsselbild der neuen Schicht (sonst sieht
+/// der Empfänger Artefakte); bis dahin läuft die alte weiter. Sendet der
+/// Absender die gewünschte Schicht nicht (Bandbreite, kleines Fenster), wird
+/// die nächstbeste genommen.
+#[derive(Debug, Clone)]
+struct Layers {
+    want: Rid,
+    active: Option<Rid>,
+    seen: Vec<(Rid, Instant)>,
+    /// Auf ein Schlüsselbild dieser Schicht wird gewartet.
+    waiting: Option<Rid>,
+}
+
+impl Default for Layers {
+    fn default() -> Self {
+        Self {
+            want: "h".into(),
+            active: None,
+            seen: Vec::new(),
+            waiting: None,
+        }
+    }
+}
+
+impl Layers {
+    fn fresh(&self, rid: Rid, now: Instant) -> bool {
+        self.seen
+            .iter()
+            .any(|(seen, at)| *seen == rid && now.duration_since(*at) < LAYER_STALE)
+    }
+
+    fn note(&mut self, rid: Rid, now: Instant) {
+        match self.seen.iter_mut().find(|(seen, _)| *seen == rid) {
+            Some(entry) => entry.1 = now,
+            None => self.seen.push((rid, now)),
+        }
+    }
+
+    /// Schicht, die gerade weitergeleitet werden soll.
+    fn target(&self, now: Instant) -> Rid {
+        if self.fresh(self.want, now) {
+            return self.want;
+        }
+        let order: [&str; 3] = match self.want.as_ref() {
+            "l" => ["l", "m", "h"],
+            "m" => ["m", "l", "h"],
+            _ => ["h", "m", "l"],
+        };
+        order
+            .into_iter()
+            .map(Rid::from)
+            .find(|rid| self.fresh(*rid, now))
+            .unwrap_or(self.want)
+    }
+
+    /// Paket dieser Schicht weiterleiten?
+    fn accept(&mut self, rid: Rid, keyframe: bool, now: Instant) -> bool {
+        self.note(rid, now);
+        let target = self.target(now);
+        if self.active == Some(rid) {
+            if rid == target {
+                self.waiting = None;
+            }
+            return true;
+        }
+        if rid != target {
+            return false;
+        }
+        let active_stale = self.active.is_some_and(|active| !self.fresh(active, now));
+        if self.active.is_none() || keyframe || active_stale {
+            self.active = Some(rid);
+            self.waiting = None;
+            return true;
+        }
+        self.waiting = Some(rid);
+        false
+    }
+
+    /// Empfänger wünscht eine andere Schicht. Liefert sie, wenn sich etwas ändert.
+    fn request(&mut self, rid: Rid) -> Option<Rid> {
+        if self.want == rid {
+            return None;
+        }
+        self.want = rid;
+        Some(rid)
+    }
+}
+
+/// Zustandsänderung, die der SFU selbst bemerkt (Videospur kam an oder ist
+/// weg, Verbindung abgerissen). Die App verteilt sie als `voice_state_update`.
+#[derive(Debug, Clone)]
+pub struct SfuEvent {
+    pub channel_id: i64,
+    pub user_id: i64,
+    /// `None`: die Person ist nicht mehr im Raum.
+    pub participant: Option<Participant>,
+}
+
+/// Meldet Änderungen eines Raums an die App.
+#[derive(Debug, Clone)]
+struct Notifier {
+    channel_id: i64,
+    tx: Sender<SfuEvent>,
+    /// Weiterleitungszeit pro Paket (Empfang → an str0m übergeben), alle Räume.
+    forward: Arc<Histogram>,
+}
+
+impl Notifier {
+    fn send(&self, user_id: i64, participant: Option<Participant>) {
+        let _ = self.tx.send(SfuEvent {
+            channel_id: self.channel_id,
+            user_id,
+            participant,
+        });
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +293,10 @@ pub struct Sfu {
 struct Inner {
     cfg: SfuConfig,
     rooms: Mutex<HashMap<i64, Arc<Room>>>,
+    events_tx: Sender<SfuEvent>,
+    events_rx: Mutex<Option<Receiver<SfuEvent>>>,
+    /// 16 Ki Messwerte (64 KB): Perzentile über die letzten Sekunden Betrieb.
+    forward: Arc<Histogram>,
 }
 
 impl Sfu {
@@ -130,12 +311,48 @@ impl Sfu {
         } else {
             info!("SFU disabled");
         }
+        let (events_tx, events_rx) = mpsc::channel();
         Self {
             inner: Arc::new(Inner {
                 cfg,
                 rooms: Mutex::new(HashMap::new()),
+                events_tx,
+                events_rx: Mutex::new(Some(events_rx)),
+                forward: Arc::new(Histogram::new(16_384)),
             }),
         }
+    }
+
+    /// Weiterleitungszeit pro Paket: vom Empfang im Raum-Thread bis zur
+    /// Übergabe an die Verbindung des Empfängers (Budget < 5 ms).
+    pub fn forward_latency(&self) -> HistogramSnapshot {
+        self.inner.forward.snapshot()
+    }
+
+    /// Zeilen für `/metrics` (Prometheus-Text).
+    pub fn render_metrics(&self) -> String {
+        let forward = self.forward_latency();
+        let rooms = self
+            .inner
+            .rooms
+            .lock()
+            .map(|rooms| rooms.values().filter(|room| room.alive()).count())
+            .unwrap_or(0);
+        format!(
+            "# TYPE nova_sfu_rooms gauge\nnova_sfu_rooms {rooms}\n\
+             # TYPE nova_sfu_forward_seconds gauge\n\
+             nova_sfu_forward_p50_seconds {}\nnova_sfu_forward_p99_seconds {}\n\
+             nova_sfu_forward_max_seconds {}\nnova_sfu_forward_packets_total {}\n",
+            forward.p50 as f64 / 1e6,
+            forward.p99 as f64 / 1e6,
+            forward.max as f64 / 1e6,
+            forward.count
+        )
+    }
+
+    /// Ereignisse, die der SFU selbst bemerkt. Nur einmal abholbar.
+    pub fn take_events(&self) -> Option<Receiver<SfuEvent>> {
+        self.inner.events_rx.lock().ok()?.take()
     }
 
     pub fn from_env() -> Self {
@@ -165,6 +382,7 @@ impl Sfu {
             muted: false,
             screen: false,
             deafened: false,
+            camera: false,
         };
         room.join(participant, offer, self.inner.cfg.public_ip)
     }
@@ -177,6 +395,7 @@ impl Sfu {
         muted: bool,
         deafened: bool,
         screen: bool,
+        camera: bool,
     ) -> Option<Participant> {
         let room = self
             .inner
@@ -192,6 +411,9 @@ impl Sfu {
         // ankommt; der Client darf es nur zurücknehmen.
         if !screen {
             state.public.screen = false;
+        }
+        if !camera {
+            state.public.camera = false;
         }
         Some(state.public.clone())
     }
@@ -232,7 +454,17 @@ impl Sfu {
         {
             return Ok(Arc::clone(room));
         }
-        let room = Room::new(channel_id, &self.inner.cfg, self.inner.cfg.max_users)?;
+        let notifier = Notifier {
+            channel_id,
+            tx: self.inner.events_tx.clone(),
+            forward: Arc::clone(&self.inner.forward),
+        };
+        let room = Room::new(
+            channel_id,
+            &self.inner.cfg,
+            self.inner.cfg.max_users,
+            notifier,
+        )?;
         rooms.insert(channel_id, Arc::clone(&room));
         Ok(room)
     }
@@ -257,7 +489,12 @@ struct ParticipantState {
 }
 
 impl Room {
-    fn new(channel_id: i64, cfg: &SfuConfig, max_users: usize) -> Result<Arc<Self>, VoiceError> {
+    fn new(
+        channel_id: i64,
+        cfg: &SfuConfig,
+        max_users: usize,
+        notifier: Notifier,
+    ) -> Result<Arc<Self>, VoiceError> {
         let mut socket = None;
         for port in cfg.port_start..=cfg.port_end {
             let bind = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
@@ -285,7 +522,7 @@ impl Room {
                     rx,
                     thread_participants,
                     thread_alive,
-                    max_users,
+                    &notifier,
                 );
             })
             .map_err(|_| VoiceError::Unavailable)?;
@@ -389,7 +626,7 @@ fn run_room(
     rx: Receiver<RoomCommand>,
     participants: Arc<Mutex<HashMap<i64, ParticipantState>>>,
     alive: Arc<AtomicBool>,
-    _max_users: usize,
+    notifier: &Notifier,
 ) {
     let mut clients: Vec<Client> = Vec::new();
     let mut to_propagate: VecDeque<Propagated> = VecDeque::new();
@@ -400,7 +637,8 @@ fn run_room(
         loop {
             match rx.try_recv() {
                 Ok(RoomCommand::Add { user_id, rtc }) => {
-                    let mut client = Client::new(*rtc, user_id, Arc::clone(&participants));
+                    let mut client =
+                        Client::new(*rtc, user_id, Arc::clone(&participants), notifier.clone());
                     for track in clients.iter().flat_map(|client| client.tracks_in.iter()) {
                         client.handle_track_open(Arc::downgrade(&track.id));
                     }
@@ -425,14 +663,19 @@ fn run_room(
             }
         }
 
-        let connected_before: Vec<i64> = clients.iter().map(|client| client.user_id).collect();
-        clients.retain(|client| client.rtc.is_alive());
-        if let Ok(mut participants) = participants.lock() {
-            for user_id in connected_before {
-                if !clients.iter().any(|client| client.user_id == user_id)
-                    && participants.remove(&user_id).is_some()
-                {
-                    debug!(user_id, "SFU participant removed after disconnect");
+        // Nur aufräumen, wenn wirklich jemand weg ist (sonst kostete jeder
+        // Durchlauf eine Allokation, ein Lock und N² Vergleiche).
+        if clients.iter().any(|client| !client.rtc.is_alive()) {
+            let connected_before: Vec<i64> = clients.iter().map(|client| client.user_id).collect();
+            clients.retain(|client| client.rtc.is_alive());
+            if let Ok(mut participants) = participants.lock() {
+                for user_id in connected_before {
+                    if !clients.iter().any(|client| client.user_id == user_id)
+                        && participants.remove(&user_id).is_some()
+                    {
+                        debug!(user_id, "SFU participant removed after disconnect");
+                        notifier.send(user_id, None);
+                    }
                 }
             }
         }
@@ -451,24 +694,50 @@ fn run_room(
             timeout = timeout.min(next);
         }
 
-        if let Some(propagated) = to_propagate.pop_front() {
-            propagate(&propagated, &mut clients);
+        // Alles Angefallene in einem Zug weiterleiten (bis 0.8 kostete jedes
+        // einzelne Ereignis einen kompletten Durchlauf über alle Verbindungen).
+        if !to_propagate.is_empty() {
+            while let Some(propagated) = to_propagate.pop_front() {
+                propagate(&propagated, &mut clients);
+            }
+            for client in clients.iter_mut() {
+                to_propagate.extend(client.take_keyframe_requests());
+            }
+            // str0m gibt frisch geschriebene Pakete erst nach einem Zeitschritt
+            // frei; ohne ihn warteten sie bis zum nächsten eingehenden Paket.
+            let now = Instant::now();
+            for client in &mut clients {
+                client.handle_input(Input::Timeout(now));
+            }
             continue;
         }
 
-        let duration = (timeout - Instant::now()).max(Duration::from_millis(1));
-        socket.set_read_timeout(Some(duration)).ok();
-
-        socket.set_nonblocking(true).ok();
-        for _ in 0..256 {
-            let Some(input) = read_socket_input(&socket, local_addr, &mut buf) else {
-                break;
-            };
-            if let Some(client) = clients.iter_mut().find(|client| client.accepts(&input)) {
-                client.handle_input(input);
+        // Auf das erste Paket warten, höchstens bis zum nächsten str0m-Timeout
+        // (ist schon etwas fällig, gar nicht), dann ohne Warten nachlesen, was
+        // im Puffer liegt. Bis 0.8 war der Socket schon beim ersten Lesen nicht
+        // blockierend: der Raum-Thread drehte dauerhaft mit 100 % CPU.
+        let wait = timeout.saturating_duration_since(Instant::now());
+        let mut read = 0;
+        if !wait.is_zero() {
+            socket
+                .set_read_timeout(Some(wait.max(Duration::from_micros(100))))
+                .ok();
+            if let Some(input) = read_socket_input(&socket, local_addr, &mut buf) {
+                route_input(&mut clients, input);
+                read = 1;
             }
         }
-        socket.set_nonblocking(false).ok();
+        if read > 0 || wait.is_zero() {
+            socket.set_nonblocking(true).ok();
+            while read < READ_BATCH {
+                let Some(input) = read_socket_input(&socket, local_addr, &mut buf) else {
+                    break;
+                };
+                route_input(&mut clients, input);
+                read += 1;
+            }
+            socket.set_nonblocking(false).ok();
+        }
 
         let now = Instant::now();
         for client in &mut clients {
@@ -479,6 +748,19 @@ fn run_room(
     alive.store(false, Ordering::Relaxed);
     if let Ok(mut participants) = participants.lock() {
         participants.clear();
+    }
+}
+
+/// Höchstens so viele Pakete am Stück lesen, bevor die Verbindungen wieder
+/// abgefragt werden. Die DTLS-Schicht von str0m hält pro Verbindung nur 30
+/// unverarbeitete Datensätze; große SDP-Neuverhandlungen über den
+/// DataChannel kamen bei vielen Personen darüber (bis 0.8: 256 → Abbruch
+/// mit „receive queue full“).
+const READ_BATCH: usize = 24;
+
+fn route_input(clients: &mut [Client], input: Input) {
+    if let Some(client) = clients.iter_mut().find(|client| client.accepts(&input)) {
+        client.handle_input(input);
     }
 }
 
@@ -493,6 +775,9 @@ fn poll_until_timeout(
         }
         match client.poll_output(socket) {
             Propagated::Timeout(timeout) => return timeout,
+            // Gesendet o. Ä.: nichts weiterzuleiten. (Bis 0.8 landete auch das
+            // in der Warteschlange und kostete je einen ganzen Durchlauf.)
+            Propagated::Noop => {}
             propagated => queue.push_back(propagated),
         }
     }
@@ -552,8 +837,13 @@ struct Client {
     cid: Option<ChannelId>,
     tracks_in: Vec<TrackInEntry>,
     tracks_out: Vec<TrackOut>,
-    chosen_rid: Option<Rid>,
+    /// Rollen der eigenen Spuren, aus den Offers des Clients.
+    roles: HashMap<Mid, TrackRole>,
+    /// Schlüsselbilder, die beim Absender angefordert werden sollen
+    /// (Absender, dessen Mid, Schicht, eigene Mid).
+    keyframe_requests: Vec<(ClientId, Mid, Option<Rid>, Mid)>,
     participants: Arc<Mutex<HashMap<i64, ParticipantState>>>,
+    notifier: Notifier,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -569,10 +859,11 @@ impl Deref for ClientId {
 #[derive(Debug)]
 struct TrackIn {
     origin: ClientId,
-    /// Nutzer hinter der Spur; wird als Stream-ID `u{user_id}` weitergegeben.
+    /// Nutzer hinter der Spur; Stream-ID siehe [`TrackRole::stream_id`].
     user_id: i64,
     mid: Mid,
     kind: MediaKind,
+    role: TrackRole,
 }
 
 /// Stream-ID ausgehender Spuren. Der Web-Client ordnet darüber Audio-/Video-
@@ -601,10 +892,6 @@ fn rtc_config() -> str0m::RtcConfig {
     config
 }
 
-fn stream_id(user_id: i64) -> String {
-    format!("u{user_id}")
-}
-
 #[derive(Debug)]
 struct TrackInEntry {
     id: Arc<TrackIn>,
@@ -615,6 +902,8 @@ struct TrackInEntry {
 struct TrackOut {
     track_in: Weak<TrackIn>,
     state: TrackOutState,
+    layers: Layers,
+    last_keyframe_request: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -643,6 +932,7 @@ impl Client {
         rtc: Rtc,
         user_id: i64,
         participants: Arc<Mutex<HashMap<i64, ParticipantState>>>,
+        notifier: Notifier,
     ) -> Self {
         static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
         Self {
@@ -653,8 +943,10 @@ impl Client {
             cid: None,
             tracks_in: Vec::new(),
             tracks_out: Vec::new(),
-            chosen_rid: None,
+            roles: HashMap::new(),
+            keyframe_requests: Vec::new(),
             participants,
+            notifier,
         }
     }
 
@@ -713,6 +1005,9 @@ impl Client {
                     Propagated::Noop
                 }
                 Event::MediaAdded(added) => self.handle_media_added(added.mid, added.kind),
+                Event::MediaChanged(changed) => {
+                    self.handle_media_changed(changed.mid, changed.direction)
+                }
                 Event::MediaData(data) => self.handle_media_data_in(data),
                 Event::KeyframeRequest(request) => self.handle_incoming_keyframe_request(request),
                 Event::ChannelOpen(cid, _) => {
@@ -726,15 +1021,24 @@ impl Client {
     }
 
     fn handle_media_added(&mut self, mid: Mid, kind: MediaKind) -> Propagated {
+        let role = self
+            .roles
+            .get(&mid)
+            .copied()
+            .filter(|role| role.fits(kind))
+            .unwrap_or_else(|| TrackRole::default_for(kind));
         if kind == MediaKind::Video {
             let Ok(mut participants) = self.participants.lock() else {
                 return Propagated::Noop;
             };
-            let streaming = participants
+            let video_tracks: usize = participants
                 .iter()
-                .filter(|(user_id, state)| **user_id != self.user_id && state.public.screen)
-                .count();
-            if streaming >= MAX_VIDEO_TRACKS {
+                .filter(|(user_id, _)| **user_id != self.user_id)
+                .map(|(_, state)| {
+                    usize::from(state.public.screen) + usize::from(state.public.camera)
+                })
+                .sum();
+            if video_tracks >= MAX_VIDEO_TRACKS {
                 warn!(
                     user_id = self.user_id,
                     "SFU: Video-Limit erreicht, Spur wird nicht weitergeleitet"
@@ -742,7 +1046,12 @@ impl Client {
                 return Propagated::Noop;
             }
             if let Some(participant) = participants.get_mut(&self.user_id) {
-                participant.public.screen = true;
+                match role {
+                    TrackRole::Camera => participant.public.camera = true,
+                    _ => participant.public.screen = true,
+                }
+                self.notifier
+                    .send(self.user_id, Some(participant.public.clone()));
             }
         }
         let entry = TrackInEntry {
@@ -751,12 +1060,48 @@ impl Client {
                 user_id: self.user_id,
                 mid,
                 kind,
+                role,
             }),
             last_keyframe_request: None,
         };
         let weak = Arc::downgrade(&entry.id);
+        self.tracks_in.retain(|track| track.id.mid != mid);
         self.tracks_in.push(entry);
         Propagated::TrackOpen(self.id, weak)
+    }
+
+    /// Richtung geändert: sendet der Client auf dieser Mid nicht mehr (Freigabe
+    /// oder Kamera beendet), fällt die Spur weg und die Empfänger verhandeln sie
+    /// ab; sendet er wieder (Transceiver wiederverwendet), entsteht sie neu.
+    fn handle_media_changed(&mut self, mid: Mid, direction: Direction) -> Propagated {
+        let receiving = matches!(direction, Direction::RecvOnly | Direction::SendRecv);
+        let existing = self.tracks_in.iter().position(|track| track.id.mid == mid);
+        match (receiving, existing) {
+            (false, Some(index)) => {
+                let track = self.tracks_in.remove(index);
+                if track.id.kind == MediaKind::Video
+                    && let Ok(mut participants) = self.participants.lock()
+                    && let Some(participant) = participants.get_mut(&self.user_id)
+                {
+                    match track.id.role {
+                        TrackRole::Camera => participant.public.camera = false,
+                        _ => participant.public.screen = false,
+                    }
+                    self.notifier
+                        .send(self.user_id, Some(participant.public.clone()));
+                }
+                Propagated::Noop
+            }
+            (true, None) => {
+                let kind = self
+                    .rtc
+                    .media(mid)
+                    .map(|media| media.kind())
+                    .unwrap_or(MediaKind::Audio);
+                self.handle_media_added(mid, kind)
+            }
+            _ => Propagated::Noop,
+        }
     }
 
     fn handle_media_data_in(&mut self, data: MediaData) -> Propagated {
@@ -800,7 +1145,7 @@ impl Client {
         let Some(track_in) = track_out.track_in.upgrade() else {
             return Propagated::Noop;
         };
-        request.rid = self.chosen_rid;
+        request.rid = track_out.layers.active;
         Propagated::KeyframeRequest(self.id, request, track_in.origin, track_in.mid)
     }
 
@@ -824,7 +1169,7 @@ impl Client {
                         let mid = change.add_media(
                             track_in.kind,
                             Direction::SendOnly,
-                            Some(stream_id(track_in.user_id)),
+                            Some(track_in.role.stream_id(track_in.user_id)),
                             None,
                             None,
                         );
@@ -857,13 +1202,75 @@ impl Client {
         true
     }
 
+    /// Nachrichten über den DataChannel: Offers (mit `roles`), Answers und
+    /// Schichtwünsche `{"type":"layer","mid":"…","rid":"h|m|l"}`.
     fn handle_channel_data(&mut self, data: ChannelData) -> Propagated {
-        if let Ok(offer) = serde_json::from_slice::<SdpOffer>(&data.data) {
-            self.handle_offer(offer);
-        } else if let Ok(answer) = serde_json::from_slice::<SdpAnswer>(&data.data) {
-            self.handle_answer(answer);
+        let Ok(message) = serde_json::from_slice::<serde_json::Value>(&data.data) else {
+            return Propagated::Noop;
+        };
+        match message.get("type").and_then(serde_json::Value::as_str) {
+            Some("offer") => {
+                if let Some(roles) = message.get("roles").and_then(serde_json::Value::as_object) {
+                    for (mid, role) in roles {
+                        if let Some(role) = role.as_str().and_then(TrackRole::parse) {
+                            self.roles.insert(Mid::from(mid.as_str()), role);
+                        }
+                    }
+                }
+                if let Ok(offer) = serde_json::from_value::<SdpOffer>(message) {
+                    self.handle_offer(offer);
+                }
+                Propagated::Noop
+            }
+            Some("answer") => {
+                if let Ok(answer) = serde_json::from_value::<SdpAnswer>(message) {
+                    self.handle_answer(answer);
+                }
+                Propagated::Noop
+            }
+            Some("layer") => {
+                let mid = message.get("mid").and_then(serde_json::Value::as_str);
+                let rid = message
+                    .get("rid")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|rid| LAYERS.contains(rid));
+                match (mid, rid) {
+                    (Some(mid), Some(rid)) => self.handle_layer_request(Mid::from(mid), rid),
+                    _ => Propagated::Noop,
+                }
+            }
+            _ => Propagated::Noop,
         }
-        Propagated::Noop
+    }
+
+    /// Empfänger wählt die Schicht einer weitergeleiteten Spur (z. B. „l“ für
+    /// eine kleine Kachel). Das Schlüsselbild der neuen Schicht wird sofort
+    /// beim Absender angefordert.
+    fn handle_layer_request(&mut self, mid: Mid, rid: &str) -> Propagated {
+        let Some(track_out) = self
+            .tracks_out
+            .iter_mut()
+            .find(|track| track.mid() == Some(mid))
+        else {
+            return Propagated::Noop;
+        };
+        let Some(changed) = track_out.layers.request(Rid::from(rid)) else {
+            return Propagated::Noop;
+        };
+        let Some(track_in) = track_out.track_in.upgrade() else {
+            return Propagated::Noop;
+        };
+        track_out.last_keyframe_request = Some(Instant::now());
+        Propagated::KeyframeRequest(
+            self.id,
+            KeyframeRequest {
+                mid,
+                rid: Some(changed),
+                kind: KeyframeRequestKind::Pli,
+            },
+            track_in.origin,
+            track_in.mid,
+        )
     }
 
     fn handle_offer(&mut self, offer: SdpOffer) {
@@ -906,29 +1313,51 @@ impl Client {
         self.tracks_out.push(TrackOut {
             track_in,
             state: TrackOutState::ToOpen,
+            layers: Layers::default(),
+            last_keyframe_request: None,
         });
     }
 
     fn handle_media_data_out(&mut self, origin: ClientId, data: &MediaData) {
-        let Some(mid) = self
-            .tracks_out
-            .iter()
-            .find(|out| {
-                out.track_in
-                    .upgrade()
-                    .filter(|track| track.origin == origin && track.mid == data.mid)
-                    .is_some()
-            })
-            .and_then(TrackOut::mid)
-        else {
+        let Some(track_out) = self.tracks_out.iter_mut().find(|out| {
+            out.track_in
+                .upgrade()
+                .filter(|track| track.origin == origin && track.mid == data.mid)
+                .is_some()
+        }) else {
             return;
         };
-        if data.rid.is_some() && data.rid != Some("h".into()) {
-            // Simulcast: aktuell wird nur die hohe Schicht weitergeleitet.
+        let Some(mid) = track_out.mid() else {
             return;
-        }
-        if self.chosen_rid != data.rid {
-            self.chosen_rid = data.rid;
+        };
+        if let Some(rid) = data.rid {
+            let now = Instant::now();
+            let before = track_out.layers.active;
+            let accepted = track_out.layers.accept(rid, data.is_keyframe(), now);
+            if track_out.layers.active != before {
+                debug!(
+                    user_id = self.user_id,
+                    from = ?before,
+                    to = ?track_out.layers.active,
+                    keyframe = data.is_keyframe(),
+                    "SFU simulcast layer switch"
+                );
+            }
+            if !accepted {
+                // Auf ein Schlüsselbild der gewünschten Schicht warten; höchstens
+                // eins pro Sekunde anfordern.
+                if let Some(waiting) = track_out.layers.waiting
+                    && track_out
+                        .last_keyframe_request
+                        .is_none_or(|at| now.duration_since(at) > Duration::from_secs(1))
+                {
+                    track_out.last_keyframe_request = Some(now);
+                    debug!(user_id = self.user_id, rid = ?waiting, "SFU waits for keyframe");
+                    self.keyframe_requests
+                        .push((origin, data.mid, Some(waiting), mid));
+                }
+                return;
+            }
         }
         let Some(writer) = self.rtc.writer(mid) else {
             return;
@@ -941,7 +1370,32 @@ impl Client {
             .is_err()
         {
             self.rtc.disconnect();
+            return;
         }
+        // Mindestens 1 µs: 0 heißt im Histogramm „leerer Platz“.
+        let micros = data.network_time.elapsed().as_micros().max(1);
+        self.notifier
+            .forward
+            .record_us(u64::try_from(micros).unwrap_or(u64::MAX));
+    }
+
+    /// Gesammelte Schlüsselbild-Wünsche als Weiterleitungen an die Absender.
+    fn take_keyframe_requests(&mut self) -> Vec<Propagated> {
+        self.keyframe_requests
+            .drain(..)
+            .map(|(origin, mid_in, rid, mid_out)| {
+                Propagated::KeyframeRequest(
+                    self.id,
+                    KeyframeRequest {
+                        mid: mid_out,
+                        rid,
+                        kind: KeyframeRequestKind::Pli,
+                    },
+                    origin,
+                    mid_in,
+                )
+            })
+            .collect()
     }
 
     fn handle_keyframe_request(&mut self, request: KeyframeRequest, mid_in: Mid) {
@@ -981,6 +1435,59 @@ impl Propagated {
 mod tests {
     use super::*;
 
+    fn rid(name: &str) -> Rid {
+        Rid::from(name)
+    }
+
+    #[test]
+    fn roles_choose_stream_ids_compatible_with_old_clients() {
+        assert_eq!(TrackRole::Mic.stream_id(7), "u7");
+        assert_eq!(TrackRole::Screen.stream_id(7), "u7");
+        assert_eq!(TrackRole::ScreenAudio.stream_id(7), "s7");
+        assert_eq!(TrackRole::Camera.stream_id(7), "c7");
+        assert_eq!(TrackRole::parse("camera"), Some(TrackRole::Camera));
+        assert_eq!(TrackRole::parse("bogus"), None);
+        assert_eq!(TrackRole::default_for(MediaKind::Video), TrackRole::Screen);
+        assert!(!TrackRole::Camera.fits(MediaKind::Audio));
+    }
+
+    #[test]
+    fn layers_start_on_wanted_layer_and_switch_on_keyframe() {
+        let now = Instant::now();
+        let mut layers = Layers::default();
+        // Startet mit „h“, ohne auf ein Schlüsselbild zu warten.
+        assert!(layers.accept(rid("h"), false, now));
+        assert!(!layers.accept(rid("l"), false, now));
+        // Wunsch „l“: „h“ läuft weiter, bis „l“ ein Schlüsselbild liefert.
+        assert_eq!(layers.request(rid("l")), Some(rid("l")));
+        assert_eq!(layers.request(rid("l")), None);
+        assert!(!layers.accept(rid("l"), false, now));
+        assert_eq!(layers.waiting, Some(rid("l")));
+        assert!(layers.accept(rid("h"), false, now));
+        assert!(layers.accept(rid("l"), true, now));
+        assert_eq!(layers.active, Some(rid("l")));
+        assert!(!layers.accept(rid("h"), true, now));
+        assert!(layers.accept(rid("l"), false, now));
+    }
+
+    #[test]
+    fn layers_fall_back_when_the_wanted_one_stops() {
+        let start = Instant::now();
+        let mut layers = Layers::default();
+        assert!(layers.accept(rid("h"), false, start));
+        assert!(!layers.accept(rid("m"), false, start));
+        // „h“ bleibt aus, „m“ kommt weiter: nach der Frist wird umgeschaltet,
+        // auch ohne Schlüsselbild (sonst stünde das Bild).
+        let later = start + LAYER_STALE + Duration::from_millis(10);
+        assert!(layers.accept(rid("m"), false, later));
+        assert_eq!(layers.active, Some(rid("m")));
+        // „h“ kommt zurück: am nächsten Schlüsselbild wieder hoch.
+        assert!(layers.accept(rid("m"), false, later));
+        assert!(!layers.accept(rid("h"), false, later));
+        assert!(layers.accept(rid("h"), true, later));
+        assert_eq!(layers.active, Some(rid("h")));
+    }
+
     fn user() -> UserPublic {
         UserPublic {
             id: 1,
@@ -1009,12 +1516,15 @@ mod tests {
 
     #[test]
     fn stream_ids_name_the_user() {
-        assert_eq!(stream_id(247126938131369984), "u247126938131369984");
+        assert_eq!(
+            TrackRole::Mic.stream_id(247126938131369984),
+            "u247126938131369984"
+        );
     }
 
     #[test]
     fn set_state_needs_a_participant() {
-        assert!(sfu().set_state(42, 1, true, false, false).is_none());
+        assert!(sfu().set_state(42, 1, true, false, false, false).is_none());
     }
 
     fn sfu() -> Sfu {

@@ -38,6 +38,16 @@ fn database_url() -> Option<String> {
 
 /// Startet API + Gateway wie `nova serve`, nur ohne statische Assets.
 async fn spawn_server(database_url: &str) -> String {
+    spawn_server_with_state(database_url).await.0
+}
+
+/// Wie [`spawn_server`], liefert zusätzlich den Zustand (für Aufräum-Tests).
+async fn spawn_server_with_state(database_url: &str) -> (String, AppState) {
+    // Serverfehler landen in der Testausgabe (nur bei Fehlschlag sichtbar).
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("warn")
+        .with_test_writer()
+        .try_init();
     let cfg = Arc::new(Config {
         database_url: database_url.to_owned(),
         bind_addr: "127.0.0.1:0".parse().expect("addr"),
@@ -48,6 +58,9 @@ async fn spawn_server(database_url: &str) -> String {
         max_message_len: 8000,
         max_upload_bytes: 1024 * 1024,
         max_avatar_bytes: 1024 * 1024,
+        guild_upload_quota: 4 * 1024 * 1024,
+        dm_upload_quota: 4 * 1024 * 1024,
+        uploads_per_minute: 1000.0,
         // Billige Argon2-Parameter: Tests prüfen Logik, nicht Härte.
         argon2_m_cost: 1024,
         argon2_t_cost: 1,
@@ -90,8 +103,17 @@ async fn spawn_server(database_url: &str) -> String {
         started: Instant::now(),
         auth_limiter: Arc::new(RateLimiter::new()),
         hash_limit: Arc::new(Semaphore::new(2)),
+        blobs: Arc::new(
+            nova_api::blob::LocalFs::open(std::env::temp_dir().join("nova-test-uploads"))
+                .await
+                .expect("blob store"),
+        ),
+        blob_gc: Arc::new(tokio::sync::RwLock::new(())),
+        media_limit: Arc::new(Semaphore::new(2)),
     };
-    let app = nova_api::router(state).merge(gateway.router());
+    // Wie `nova serve`: Aufräumer und nachgereichte `guild_activity`.
+    gateway.spawn_janitor();
+    let app = nova_api::router(state.clone()).merge(gateway.router());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -104,7 +126,7 @@ async fn spawn_server(database_url: &str) -> String {
         .await
         .ok();
     });
-    format!("http://{addr}")
+    (format!("http://{addr}"), state)
 }
 
 fn unique(prefix: &str) -> String {
@@ -173,6 +195,38 @@ impl Client {
 
     async fn delete(&self, path: &str) -> (u16, Value) {
         self.call(reqwest::Method::DELETE, path, None).await
+    }
+
+    /// Rohe Bytes hochladen (`POST …/attachments?filename=`).
+    async fn upload(&self, path: &str, filename: &str, bytes: Vec<u8>) -> (u16, Value) {
+        let response = self
+            .http
+            .post(format!(
+                "{}{path}?filename={}",
+                self.base,
+                encode_query(filename)
+            ))
+            .bearer_auth(&self.token)
+            .header("content-type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await
+            .expect("upload");
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// GET mit zusätzlichen Headern, liefert die ganze Antwort.
+    async fn fetch(&self, path: &str, headers: &[(&str, &str)]) -> reqwest::Response {
+        let mut request = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(&self.token);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.send().await.expect("fetch")
     }
 
     /// Guild anlegen, liefert (guild_id, channel_id des Standardkanals).
@@ -757,6 +811,50 @@ async fn next_frame(
     }
 }
 
+/// Nächstes Event außer `guild_activity` (das kommt nach jeder
+/// Guild-Nachricht zusätzlich).
+async fn next_event(
+    stream: &mut (
+             impl StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin
+         ),
+) -> Event {
+    loop {
+        let event: Event = protocol::decode_body(&next_frame(stream, protocol::OP_DISPATCH).await)
+            .expect("dispatch");
+        if !matches!(event, Event::GuildActivity { .. }) {
+            return event;
+        }
+    }
+}
+
+/// Per WebSocket anmelden; liefert die Hälften des Sockets.
+async fn connect_gateway(
+    base: &str,
+    token: &str,
+) -> (
+    impl SinkExt<WsMessage, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    impl StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+) {
+    let ws_url = format!("{}/gateway", base.replacen("http", "ws", 1));
+    let (socket, _) = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .expect("connect");
+    let (mut sink, mut stream) = socket.split();
+    let hello = ClientOp::Hello {
+        token: token.to_owned(),
+        resume: None,
+    };
+    sink.send(WsMessage::Binary(
+        protocol::encode(protocol::OP_HELLO, 0, &hello).expect("encode"),
+    ))
+    .await
+    .expect("hello");
+    let ok: ServerOp =
+        protocol::decode_body(&next_frame(&mut stream, protocol::OP_HELLO_OK).await).expect("ok");
+    assert!(matches!(ok, ServerOp::HelloOk { .. }));
+    (sink, stream)
+}
+
 #[tokio::test]
 async fn gateway_roundtrip_ack_dispatch_and_rest_fanout() {
     let url = db_or_skip!();
@@ -815,9 +913,7 @@ async fn gateway_roundtrip_ack_dispatch_and_rest_fanout() {
         panic!("kein Ack: {ack:?}");
     };
     assert_eq!(nonce, 42);
-    let event: Event = protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
-        .expect("dispatch");
-    match event {
+    match next_event(&mut stream).await {
         Event::MessageCreate { message } => {
             assert_eq!(Some(message.id), id);
             assert_eq!(message.content, "über das Gateway");
@@ -833,8 +929,7 @@ async fn gateway_roundtrip_ack_dispatch_and_rest_fanout() {
         )
         .await;
     assert_eq!(status, 201);
-    let event: Event = protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
-        .expect("dispatch");
+    let event = next_event(&mut stream).await;
     assert!(matches!(event, Event::MessageCreate { message } if message.content == "per REST"));
 }
 
@@ -999,4 +1094,765 @@ async fn direct_messages_open_send_list_and_stay_private() {
     assert_eq!(status, 404);
     let (_, eve_list) = eve.get("/api/v1/users/@me/dms").await;
     assert_eq!(eve_list.as_array().map(Vec::len), Some(0));
+}
+
+/// Kleines JPEG mit EXIF-Drehung (6) und GPS-Daten, Kommentar und Anhängsel
+/// hinter dem Bildende.
+fn jpeg_with_gps(marker: &str) -> Vec<u8> {
+    let mut data = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+    data.extend_from_slice(b"JFIF\0\x01\x01\0\0\x01\0\x01\0\0");
+    let mut tiff = b"MM\x00\x2A\x00\x00\x00\x08".to_vec();
+    tiff.extend_from_slice(&[0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0]);
+    tiff.extend_from_slice(&[0, 0, 0, 0]);
+    tiff.extend_from_slice(format!("GPS 52.52N 13.40E {marker}").as_bytes());
+    let mut app1 = b"Exif\0\0".to_vec();
+    app1.extend_from_slice(&tiff);
+    data.extend_from_slice(&[0xFF, 0xE1]);
+    data.extend_from_slice(&((app1.len() + 2) as u16).to_be_bytes());
+    data.extend_from_slice(&app1);
+    data.extend_from_slice(&[0xFF, 0xC0, 0, 11, 8, 0, 30, 0, 40, 1, 1, 0x11, 0]);
+    data.extend_from_slice(&[0xFF, 0xDA, 0, 8, 1, 1, 0, 0, 0x3F, 0]);
+    data.extend_from_slice(&[0x12, 0x34, 0xFF, 0x00, 0x56]);
+    data.extend_from_slice(&[0xFF, 0xD9]);
+    data.extend_from_slice(b"<html>polyglot</html>");
+    data
+}
+
+#[tokio::test]
+async fn uploads_strip_metadata_and_restrict_downloads() {
+    let url = db_or_skip!();
+    let base = spawn_server(&url).await;
+    let owner = Client::register(&base, "upo").await;
+    let member = Client::register(&base, "upm").await;
+    let stranger = Client::register(&base, "ups").await;
+    let (guild_id, channel_id) = owner.guild().await;
+    owner.invite_and_join(&member, &guild_id).await;
+    let upload_path = format!("/api/v1/channels/{channel_id}/attachments");
+
+    // Fremde können nicht in den Kanal hochladen.
+    let (status, _) = stranger
+        .upload(&upload_path, "x.txt", b"hallo".to_vec())
+        .await;
+    assert_eq!(status, 404);
+
+    let marker = unique("geheim");
+    let (status, photo) = owner
+        .upload(&upload_path, "../Urlaub 2026.jpg", jpeg_with_gps(&marker))
+        .await;
+    assert_eq!(status, 201, "{photo}");
+    assert_eq!(photo["content_type"], "image/jpeg");
+    assert_eq!(photo["filename"], "Urlaub 2026.jpg");
+    // Drehung 6: Anzeige ist 30 breit, 40 hoch.
+    assert_eq!(photo["width"], 30);
+    assert_eq!(photo["height"], 40);
+    let photo_id = photo["id"].as_str().expect("id").to_owned();
+    let download = format!("/api/v1/attachments/{photo_id}");
+
+    // Noch nicht gesendet: nur die hochladende Person sieht den Upload.
+    assert_eq!(member.fetch(&download, &[]).await.status().as_u16(), 404);
+    let response = owner.fetch(&download, &[]).await;
+    assert_eq!(response.status().as_u16(), 200);
+    let headers = response.headers().clone();
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["content-type"], "image/jpeg");
+    assert!(
+        headers["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("sandbox")
+    );
+    assert!(
+        headers["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("inline;")
+    );
+    let etag = headers["etag"].to_str().unwrap().to_owned();
+    let body = response.bytes().await.expect("body");
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains(&marker), "GPS-Daten müssen weg sein");
+    assert!(!text.contains("polyglot"));
+    assert_eq!(&body[..2], &[0xFF, 0xD8]);
+
+    // Senden hängt den Upload an; danach sehen ihn alle Mitglieder.
+    let (status, message) = owner
+        .post(
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            json!({ "content": "", "attachment_ids": [photo_id] }),
+        )
+        .await;
+    assert_eq!(status, 201, "{message}");
+    assert_eq!(message["attachments"][0]["id"], photo_id.as_str());
+    let response = member.fetch(&download, &[]).await;
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(response.bytes().await.unwrap(), body);
+    assert_eq!(stranger.fetch(&download, &[]).await.status().as_u16(), 404);
+
+    // Ein Anhang gehört zu genau einer Nachricht.
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            json!({ "content": "nochmal", "attachment_ids": [photo_id] }),
+        )
+        .await;
+    assert_eq!(status, 400);
+    // Fremde Uploads lassen sich nicht anhängen.
+    let (status, note) = member
+        .upload(&upload_path, "notiz.txt", b"nur meins".to_vec())
+        .await;
+    assert_eq!(status, 201);
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            json!({ "content": "klau", "attachment_ids": [note["id"]] }),
+        )
+        .await;
+    assert_eq!(status, 400);
+
+    // Verlauf enthält den Anhang.
+    let (_, history) = member
+        .get(&format!("/api/v1/channels/{channel_id}/messages"))
+        .await;
+    let last = history.as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["attachments"][0]["filename"], "Urlaub 2026.jpg");
+
+    // Teil-Download, Cache-Validierung
+    let response = member.fetch(&download, &[("range", "bytes=0-1")]).await;
+    assert_eq!(response.status().as_u16(), 206);
+    assert_eq!(
+        response.headers()["content-range"].to_str().unwrap(),
+        format!("bytes 0-1/{}", body.len())
+    );
+    assert_eq!(response.bytes().await.unwrap().as_ref(), &[0xFF, 0xD8]);
+    let response = member.fetch(&download, &[("if-none-match", &etag)]).await;
+    assert_eq!(response.status().as_u16(), 304);
+
+    // Textdateien und SVG sind Downloads, nie inline.
+    let (status, svg) = owner
+        .upload(
+            &upload_path,
+            "bild.svg",
+            b"<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>".to_vec(),
+        )
+        .await;
+    assert_eq!(status, 201);
+    assert_eq!(svg["content_type"], "text/plain; charset=utf-8");
+    let response = owner
+        .fetch(
+            &format!("/api/v1/attachments/{}", svg["id"].as_str().unwrap()),
+            &[],
+        )
+        .await;
+    assert!(
+        response.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment;")
+    );
+
+    // Leer, zu groß
+    let (status, _) = owner.upload(&upload_path, "leer.txt", Vec::new()).await;
+    assert_eq!(status, 400);
+    let (status, _) = owner
+        .upload(&upload_path, "gross.bin", vec![7u8; 1024 * 1024 + 1])
+        .await;
+    assert_eq!(status, 413);
+
+    // Verwerfen: nur eigene, nur ungesendete
+    let (status, draft) = owner
+        .upload(&upload_path, "entwurf.txt", b"weg damit".to_vec())
+        .await;
+    assert_eq!(status, 201);
+    let draft_path = format!("/api/v1/attachments/{}", draft["id"].as_str().unwrap());
+    assert_eq!(member.delete(&draft_path).await.0, 404);
+    assert_eq!(owner.delete(&draft_path).await.0, 204);
+    assert_eq!(owner.fetch(&draft_path, &[]).await.status().as_u16(), 404);
+    assert_eq!(owner.delete(&download).await.0, 404, "gesendet bleibt");
+
+    // Ohne ATTACH_FILES (Kanal-Override) kein Upload, aber Schreiben geht.
+    let (status, _) = owner
+        .put(
+            &format!(
+                "/api/v1/channels/{channel_id}/overrides/member/{}",
+                member.id
+            ),
+            json!({ "allow": 0, "deny": 1u64 << 11 }),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (status, _) = member.upload(&upload_path, "x.txt", b"x".to_vec()).await;
+    assert_eq!(status, 403);
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{channel_id}/messages"),
+            json!({ "content": "Text geht noch" }),
+        )
+        .await;
+    assert_eq!(status, 201);
+}
+
+#[tokio::test]
+async fn uploads_reach_gateway_dms_and_get_cleaned_up() {
+    let url = db_or_skip!();
+    let (base, state) = spawn_server_with_state(&url).await;
+    let alice = Client::register(&base, "upa").await;
+    let bob = Client::register(&base, "upb").await;
+    let eve = Client::register(&base, "upe").await;
+    let (_, channel_id) = alice.guild().await;
+    let channel: i64 = channel_id.parse().expect("channel id");
+
+    // Gateway: Nachricht nur aus einem Anhang
+    let ws_url = format!("{}/gateway", base.replacen("http", "ws", 1));
+    let (socket, _) = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .expect("connect");
+    let (mut sink, mut stream) = socket.split();
+    let send = |op: u8, value: ClientOp| {
+        WsMessage::Binary(protocol::encode(op, 0, &value).expect("encode"))
+    };
+    sink.send(send(
+        protocol::OP_HELLO,
+        ClientOp::Hello {
+            token: alice.token.clone(),
+            resume: None,
+        },
+    ))
+    .await
+    .expect("hello");
+    next_frame(&mut stream, protocol::OP_HELLO_OK).await;
+    sink.send(send(
+        protocol::OP_REQUEST,
+        ClientOp::Subscribe {
+            channel_id: channel,
+        },
+    ))
+    .await
+    .expect("subscribe");
+    next_frame(&mut stream, protocol::OP_RESPONSE).await;
+
+    let content = unique("protokoll").into_bytes();
+    let (status, file) = alice
+        .upload(
+            &format!("/api/v1/channels/{channel_id}/attachments"),
+            "protokoll.txt",
+            content.clone(),
+        )
+        .await;
+    assert_eq!(status, 201, "{file}");
+    let file_id: i64 = file["id"].as_str().unwrap().parse().unwrap();
+    sink.send(send(
+        protocol::OP_REQUEST,
+        ClientOp::MessageCreate {
+            nonce: 7,
+            channel_id: channel,
+            content: String::new(),
+            reply_to: None,
+            attachment_ids: vec![file_id],
+        },
+    ))
+    .await
+    .expect("send");
+    next_frame(&mut stream, protocol::OP_ACK).await;
+    match next_event(&mut stream).await {
+        Event::MessageCreate { message } => {
+            assert_eq!(message.attachments.len(), 1);
+            assert_eq!(message.attachments[0].id, file_id);
+            assert_eq!(message.attachments[0].filename, "protokoll.txt");
+            assert!(
+                message.attachments[0]
+                    .url
+                    .ends_with(&format!("/attachments/{file_id}"))
+            );
+        }
+        other => panic!("unerwartetes Event: {other:?}"),
+    }
+
+    // Direktnachricht mit Anhang
+    let (_, bob_me) = bob.get("/api/v1/users/@me").await;
+    let (_, dm) = alice
+        .post(
+            "/api/v1/users/@me/dms",
+            json!({ "handle": bob_me["handle"] }),
+        )
+        .await;
+    let dm_id = dm["id"].as_str().unwrap().to_owned();
+    let (status, _) = eve
+        .upload(
+            &format!("/api/v1/dms/{dm_id}/attachments"),
+            "x.txt",
+            b"x".to_vec(),
+        )
+        .await;
+    assert_eq!(status, 404);
+    let (status, secret) = alice
+        .upload(
+            &format!("/api/v1/dms/{dm_id}/attachments"),
+            "geheim.txt",
+            b"nur fuer bob".to_vec(),
+        )
+        .await;
+    assert_eq!(status, 201, "{secret}");
+    let secret_path = format!("/api/v1/attachments/{}", secret["id"].as_str().unwrap());
+    assert_eq!(bob.fetch(&secret_path, &[]).await.status().as_u16(), 404);
+    let (status, sent) = alice
+        .post(
+            &format!("/api/v1/dms/{dm_id}/messages"),
+            json!({ "content": "", "attachment_ids": [secret["id"]] }),
+        )
+        .await;
+    assert_eq!(status, 201, "{sent}");
+    let response = bob.fetch(&secret_path, &[]).await;
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(response.text().await.unwrap(), "nur fuer bob");
+    assert_eq!(eve.fetch(&secret_path, &[]).await.status().as_u16(), 404);
+    let (_, history) = bob.get(&format!("/api/v1/dms/{dm_id}/messages")).await;
+    assert_eq!(history[0]["attachments"][0]["filename"], "geheim.txt");
+
+    // Aufräumen: ein nie gesendeter, alter Upload verschwindet samt Blob.
+    let orphan_bytes = unique("verwaist").into_bytes();
+    let (status, orphan) = alice
+        .upload(
+            &format!("/api/v1/channels/{channel_id}/attachments"),
+            "verwaist.txt",
+            orphan_bytes.clone(),
+        )
+        .await;
+    assert_eq!(status, 201);
+    let orphan_id: i64 = orphan["id"].as_str().unwrap().parse().unwrap();
+    sqlx::query("update attachments set created_at = now() - interval '2 days' where id = $1")
+        .bind(orphan_id)
+        .execute(&state.db.pool)
+        .await
+        .expect("age row");
+    let hash = hex_sha256(&orphan_bytes);
+    let blob = std::env::temp_dir()
+        .join("nova-test-uploads")
+        .join(&hash[..2])
+        .join(&hash);
+    assert!(blob.exists(), "Blob liegt unter dem Hash");
+    std::fs::File::options()
+        .append(true)
+        .open(&blob)
+        .and_then(|file| {
+            file.set_modified(std::time::SystemTime::now() - Duration::from_secs(7200))
+        })
+        .expect("age blob");
+    let (rows, _) = nova_api::uploads::sweep(&state).await.expect("sweep");
+    assert!(rows >= 1);
+    assert!(!blob.exists(), "Blob ohne Verweis ist gelöscht");
+    assert_eq!(
+        alice
+            .fetch(&format!("/api/v1/attachments/{orphan_id}"), &[])
+            .await
+            .status()
+            .as_u16(),
+        404
+    );
+    // Gesendete Anhänge bleiben.
+    let response = alice
+        .fetch(&format!("/api/v1/attachments/{file_id}"), &[])
+        .await;
+    assert_eq!(response.bytes().await.unwrap().as_ref(), content.as_slice());
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+fn encode_query(text: &str) -> String {
+    text.bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn forums_webhooks_and_channel_overrides() {
+    let url = db_or_skip!();
+    let base = spawn_server(&url).await;
+    let owner = Client::register(&base, "fro").await;
+    let member = Client::register(&base, "frm").await;
+    let (guild_id, text_channel) = owner.guild().await;
+    owner.invite_and_join(&member, &guild_id).await;
+
+    // Forum anlegen (kind 3); direkt schreiben geht dort nicht.
+    let (status, forum) = owner
+        .post(
+            &format!("/api/v1/guilds/{guild_id}/channels"),
+            json!({ "name": "fragen", "kind": 3 }),
+        )
+        .await;
+    assert_eq!(status, 201, "{forum}");
+    let forum_id = forum["id"].as_str().unwrap().to_owned();
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{forum_id}/messages"),
+            json!({ "content": "direkt" }),
+        )
+        .await;
+    assert_eq!(status, 400);
+
+    // Beitrag mit Anhang, Antwort im Thread, Übersicht
+    let (status, file) = member
+        .upload(
+            &format!("/api/v1/channels/{forum_id}/attachments"),
+            "log.txt",
+            b"Fehlermeldung".to_vec(),
+        )
+        .await;
+    assert_eq!(status, 201, "{file}");
+    let (status, post) = member
+        .post(
+            &format!("/api/v1/channels/{forum_id}/posts"),
+            json!({ "title": "Spiel startet nicht", "content": "Was tun?", "attachment_ids": [file["id"]] }),
+        )
+        .await;
+    assert_eq!(status, 201, "{post}");
+    let thread_id = post["thread"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(post["thread"]["parent_id"], forum_id.as_str());
+    assert_eq!(post["thread"]["kind"], 2);
+    assert_eq!(post["message"]["attachments"][0]["filename"], "log.txt");
+    assert_eq!(
+        owner
+            .fetch(
+                &format!("/api/v1/attachments/{}", file["id"].as_str().unwrap()),
+                &[]
+            )
+            .await
+            .status()
+            .as_u16(),
+        200
+    );
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{thread_id}/messages"),
+            json!({ "content": "Treiber aktualisieren." }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    let (status, posts) = member
+        .get(&format!("/api/v1/channels/{forum_id}/posts"))
+        .await;
+    assert_eq!(status, 200, "{posts}");
+    assert_eq!(posts[0]["title"], "Spiel startet nicht");
+    assert_eq!(posts[0]["replies"], 1);
+    assert_eq!(posts[0]["preview"], "Was tun?");
+    let (status, _) = member
+        .get(&format!("/api/v1/channels/{text_channel}/posts"))
+        .await;
+    assert_eq!(status, 400, "Textkanal ist kein Forum");
+
+    // Overrides lesen: nur mit MANAGE_ROLES + MANAGE_CHANNELS
+    let (status, _) = owner
+        .put(
+            &format!("/api/v1/channels/{forum_id}/overrides/member/{}", member.id),
+            json!({ "allow": 0, "deny": 1u64 << 8 }),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (status, overrides) = owner
+        .get(&format!("/api/v1/channels/{forum_id}/overrides"))
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(overrides[0]["kind"], "member");
+    assert_eq!(overrides[0]["target_id"], member.id.as_str());
+    assert_eq!(overrides[0]["deny"], 1u64 << 8);
+    assert_eq!(
+        member
+            .get(&format!("/api/v1/channels/{forum_id}/overrides"))
+            .await
+            .0,
+        403
+    );
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{forum_id}/posts"),
+            json!({ "title": "Noch was", "content": "x" }),
+        )
+        .await;
+    assert_eq!(status, 403, "SEND_MESSAGES im Forum verweigert");
+
+    // Webhooks
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{text_channel}/webhooks"),
+            json!({ "name": "CI" }),
+        )
+        .await;
+    assert_eq!(status, 403, "ohne MANAGE_WEBHOOKS");
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{forum_id}/webhooks"),
+            json!({ "name": "CI" }),
+        )
+        .await;
+    assert_eq!(status, 400, "nur Textkanäle");
+    let (status, hook) = owner
+        .post(
+            &format!("/api/v1/channels/{text_channel}/webhooks"),
+            json!({ "name": "Build-Bot" }),
+        )
+        .await;
+    assert_eq!(status, 201, "{hook}");
+    let hook_id = hook["id"].as_str().unwrap().to_owned();
+    let token = hook["token"].as_str().unwrap().to_owned();
+    assert!(
+        hook["url"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/api/v1/webhooks/{hook_id}/{token}"))
+    );
+    let (_, list) = owner
+        .get(&format!("/api/v1/channels/{text_channel}/webhooks"))
+        .await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert!(list[0].get("token").is_none(), "Token nur einmal");
+
+    let http = reqwest::Client::new();
+    let wrong = http
+        .post(format!(
+            "{base}/api/v1/webhooks/{hook_id}/{}",
+            "0".repeat(64)
+        ))
+        .json(&json!({ "content": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status().as_u16(), 404);
+    let ok = http
+        .post(format!("{base}/api/v1/webhooks/{hook_id}/{token}"))
+        .json(&json!({ "content": "Build #42 grün" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status().as_u16(), 201);
+    let (_, history) = member
+        .get(&format!("/api/v1/channels/{text_channel}/messages"))
+        .await;
+    let last = history.as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["content"], "Build #42 grün");
+    assert_eq!(last["author"]["display_name"], "Build-Bot");
+    assert_eq!(last["author"]["bot"], true);
+
+    assert_eq!(
+        owner.delete(&format!("/api/v1/webhooks/{hook_id}")).await.0,
+        204
+    );
+    let gone = http
+        .post(format!("{base}/api/v1/webhooks/{hook_id}/{token}"))
+        .json(&json!({ "content": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status().as_u16(), 404);
+}
+
+/// Liest eine Weile mit und scheitert, falls `guild_activity` ankommt.
+async fn assert_no_activity(
+    stream: &mut (
+             impl StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin
+         ),
+    wait: Duration,
+) {
+    let deadline = Instant::now() + wait;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        match tokio::time::timeout(remaining, stream.next()).await {
+            Err(_) => return,
+            Ok(Some(Ok(WsMessage::Binary(bytes)))) => {
+                let frame = protocol::decode(&bytes).expect("frame");
+                if frame.op == protocol::OP_DISPATCH {
+                    let event: Event = protocol::decode_body(frame.body).expect("dispatch");
+                    assert!(
+                        !matches!(event, Event::GuildActivity { .. }),
+                        "unerwartet: {event:?}"
+                    );
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(other) => panic!("Socket: {other:?}"),
+        }
+    }
+}
+
+/// Ungelesen-Stand eines Servers aus `GET /users/@me/unread`.
+fn guild_unread(list: &Value, guild_id: &str) -> (bool, i64) {
+    let entry = list
+        .as_array()
+        .expect("Liste")
+        .iter()
+        .find(|entry| entry["guild_id"] == guild_id)
+        .unwrap_or_else(|| panic!("Server {guild_id} fehlt: {list}"));
+    (
+        entry["unread"].as_bool().expect("unread"),
+        entry["mentions"].as_i64().expect("mentions"),
+    )
+}
+
+#[tokio::test]
+async fn unread_summary_counts_only_visible_mentions() {
+    let url = db_or_skip!();
+    let base = spawn_server(&url).await;
+    let owner = Client::register(&base, "uro").await;
+    let member = Client::register(&base, "urm").await;
+    let (guild_id, general) = owner.guild().await;
+    owner.invite_and_join(&member, &guild_id).await;
+    let guild: i64 = guild_id.parse().expect("guild id");
+    let (_, me) = member.get("/api/v1/users/@me").await;
+    let handle = me["handle"].as_str().expect("handle").to_owned();
+    let (_, owner_me) = owner.get("/api/v1/users/@me").await;
+    let owner_handle = owner_me["handle"].as_str().expect("handle").to_owned();
+
+    // Ein Kanal, den das Mitglied nicht sehen darf.
+    let (status, secret) = owner
+        .post(
+            &format!("/api/v1/guilds/{guild_id}/channels"),
+            json!({ "name": "geheim" }),
+        )
+        .await;
+    assert_eq!(status, 201, "{secret}");
+    let secret_id = secret["id"].as_str().expect("id").to_owned();
+    let (status, _) = owner
+        .put(
+            &format!(
+                "/api/v1/channels/{secret_id}/overrides/member/{}",
+                member.id
+            ),
+            json!({ "allow": 0, "deny": 1u64 << 7 }),
+        )
+        .await;
+    assert_eq!(status, 204);
+
+    let (status, list) = member.get("/api/v1/users/@me/unread").await;
+    assert_eq!(status, 200, "{list}");
+    assert_eq!(
+        guild_unread(&list, &guild_id),
+        (false, 0),
+        "frisch beigetreten"
+    );
+
+    let (_owner_sink, mut owner_stream) = connect_gateway(&base, &owner.token).await;
+    let (_sink, mut stream) = connect_gateway(&base, &member.token).await;
+
+    // Erwähnung im sichtbaren Kanal: gezielter Hinweis plus allgemeines Ereignis.
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{general}/messages"),
+            json!({ "content": format!("Hallo @{handle}, schau mal") }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let event: Event =
+            protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
+                .expect("dispatch");
+        match event {
+            Event::GuildActivity {
+                guild_id,
+                mentioned,
+            } => {
+                assert_eq!(guild_id, guild);
+                seen.push(mentioned);
+            }
+            other => panic!("unerwartetes Event: {other:?}"),
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, vec![false, true]);
+
+    // Versteckter Kanal: weder Hinweis noch Ereignis – auch nicht, wann dort
+    // geschrieben wird. Der Autor selbst bekommt nie eins.
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{secret_id}/messages"),
+            json!({ "content": format!("@{handle} darf das nicht lesen") }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    assert_no_activity(&mut stream, Duration::from_millis(1500)).await;
+    assert_no_activity(&mut owner_stream, Duration::from_millis(50)).await;
+
+    // Serie im sichtbaren Kanal: sofort eins, der Rest am Ende der Sekunde.
+    for text in ["eins", "zwei", "drei"] {
+        let (status, _) = owner
+            .post(
+                &format!("/api/v1/channels/{general}/messages"),
+                json!({ "content": text }),
+            )
+            .await;
+        assert_eq!(status, 201);
+    }
+    for _ in 0..2 {
+        let event: Event =
+            protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
+                .expect("dispatch");
+        assert!(
+            matches!(
+                event,
+                Event::GuildActivity {
+                    mentioned: false,
+                    ..
+                }
+            ),
+            "{event:?}"
+        );
+    }
+    assert_no_activity(&mut stream, Duration::from_millis(1200)).await;
+    assert_no_activity(&mut owner_stream, Duration::from_millis(50)).await;
+
+    let (_, list) = member.get("/api/v1/users/@me/unread").await;
+    assert_eq!(guild_unread(&list, &guild_id), (true, 1));
+
+    // Nur ein Server auf Nachfrage; fremde Server bleiben unsichtbar.
+    let (_, only) = member
+        .get(&format!("/api/v1/users/@me/unread?guild_id={guild_id}"))
+        .await;
+    assert_eq!(only.as_array().map(Vec::len), Some(1), "{only}");
+    let (foreign, _) = owner.guild().await;
+    let (status, none) = member
+        .get(&format!("/api/v1/users/@me/unread?guild_id={foreign}"))
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(none, json!([]));
+
+    // Eigene Nachrichten und Selbst-Erwähnungen zählen nicht.
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{general}/messages"),
+            json!({ "content": format!("@{owner_handle} Notiz an mich") }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    let (_, list) = owner.get("/api/v1/users/@me/unread").await;
+    assert_eq!(guild_unread(&list, &guild_id), (false, 0));
+
+    // Gelesen: Punkt und Zahl verschwinden.
+    let (_, history) = member
+        .get(&format!("/api/v1/channels/{general}/messages"))
+        .await;
+    let last = history
+        .as_array()
+        .and_then(|list| list.last())
+        .and_then(|message| message["id"].as_str())
+        .expect("letzte Nachricht")
+        .to_owned();
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{general}/ack"),
+            json!({ "message_id": last }),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (_, list) = member.get("/api/v1/users/@me/unread").await;
+    assert_eq!(guild_unread(&list, &guild_id), (false, 0));
 }

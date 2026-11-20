@@ -3,7 +3,7 @@
 //!
 //! `?screen=` zeigt einen ganzen Bildschirm mit Testdaten (für
 //! `docs/screenshots/`), `?theme=light|dark` erzwingt das Theme:
-//! login, chat, voice, screenshare, palette, settings, moderation, thread.
+//! login, chat, uploads, voice, screenshare, palette, settings, moderation, thread.
 
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ use dioxus::prelude::*;
 
 use crate::{
     components::{Avatar, EmptyState, Icon, IconButton, Kbd, Skeleton, StatusDot},
-    store::{History, Overlay, ServerTab, SettingsTab, Store},
+    store::{History, Overlay, PendingUpload, ServerTab, SettingsTab, Store, UploadState},
     types::*,
     views,
 };
@@ -186,6 +186,26 @@ fn mock_store(screen: &str) -> Store {
         ..Default::default()
     };
     main_history.messages[3].pinned = true;
+    if screen == "uploads" {
+        main_history.messages[2].attachments = vec![
+            Attachment {
+                id: "5001".into(),
+                filename: "map-pool.png".into(),
+                content_type: "image/png".into(),
+                size: 482_113,
+                width: Some(1280),
+                height: Some(720),
+            },
+            Attachment {
+                id: "5002".into(),
+                filename: "Regeln Freitagsrunde.pdf".into(),
+                content_type: "application/pdf".into(),
+                size: 88_400,
+                width: None,
+                height: None,
+            },
+        ];
+    }
     main_history.messages[6].reactions = vec![
         Reaction {
             emoji: "👍".into(),
@@ -264,6 +284,25 @@ fn mock_store(screen: &str) -> Store {
         },
     ]);
     store.guilds_loaded.set(true);
+    // Server-Leiste: einer mit Erwähnungen, einer nur ungelesen.
+    store.guild_unread.set(HashMap::from([
+        (
+            "2".to_owned(),
+            GuildUnread {
+                guild_id: "2".into(),
+                unread: true,
+                mentions: 3,
+            },
+        ),
+        (
+            "3".to_owned(),
+            GuildUnread {
+                guild_id: "3".into(),
+                unread: true,
+                mentions: 0,
+            },
+        ),
+    ]));
     store.detail.set(Some(detail));
     store.history.set(history);
     store.voice_rooms.write().insert("20".into(), lounge);
@@ -281,6 +320,41 @@ fn mock_store(screen: &str) -> Store {
         if screen == "screenshare" {
             voice.video_users = vec!["101".into()];
         }
+    }
+    if screen == "uploads" {
+        store.uploads.write().insert(
+            "10".into(),
+            vec![
+                PendingUpload {
+                    key: 1,
+                    name: "clip-ace.mp4".into(),
+                    size: 18_400_000,
+                    progress: 0.42,
+                    state: UploadState::Uploading,
+                },
+                PendingUpload {
+                    key: 2,
+                    name: "notizen.txt".into(),
+                    size: 412,
+                    progress: 1.0,
+                    state: UploadState::Done(Attachment {
+                        id: "5003".into(),
+                        filename: "notizen.txt".into(),
+                        content_type: "text/plain; charset=utf-8".into(),
+                        size: 412,
+                        width: None,
+                        height: None,
+                    }),
+                },
+                PendingUpload {
+                    key: 3,
+                    name: "riesig.iso".into(),
+                    size: 4_000_000_000,
+                    progress: 0.0,
+                    state: UploadState::Failed("Die Datei ist zu groß.".into()),
+                },
+            ],
+        );
     }
     if screen == "chat" {
         store.typing.write().push(crate::store::Typing {
@@ -368,7 +442,7 @@ fn Components() -> Element {
             h1 { "Nova – Komponenten" }
             p { class: "nv-muted",
                 "Bildschirme: "
-                for screen in ["login", "onboarding", "chat", "thread", "voice", "screenshare", "palette", "settings", "moderation", "member"] {
+                for screen in ["login", "onboarding", "chat", "uploads", "thread", "voice", "screenshare", "palette", "settings", "moderation", "member"] {
                     a { key: "{screen}", href: "/dev/gallery?screen={screen}", style: "color: var(--nv-accent); margin-right: 12px", "{screen}" }
                 }
             }
