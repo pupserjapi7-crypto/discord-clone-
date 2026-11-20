@@ -393,6 +393,16 @@ pub enum Event {
     DmMessageCreate {
         message: MessageView,
     },
+    /// „In dieser Guild gibt es Neues für dich“ – nur an Sessions, die den
+    /// Kanal lesen dürfen, nie an den Autor; höchstens einmal pro Sekunde und
+    /// Kanal (der Rest der Sekunde wird nachgereicht). Ohne Kanal-ID; den
+    /// genauen Stand liefert `GET /users/@me/unread`. Mit `mentioned = true`
+    /// geht es sofort und nur an Erwähnte. Neu in v0.8.
+    GuildActivity {
+        guild_id: i64,
+        #[serde(default)]
+        mentioned: bool,
+    },
 }
 
 impl Event {
@@ -411,6 +421,7 @@ impl Event {
             Event::MessagePin { .. } => "message_pin",
             Event::VoiceStateUpdate { .. } => "voice_state_update",
             Event::DmMessageCreate { .. } => "dm_message_create",
+            Event::GuildActivity { .. } => "guild_activity",
         }
     }
 }
@@ -505,6 +516,10 @@ mod tests {
     fn new_events_roundtrip_and_keep_their_tag() {
         let events = [
             Event::GuildUpdate { guild_id: 1 },
+            Event::GuildActivity {
+                guild_id: 7,
+                mentioned: true,
+            },
             Event::GuildMemberRemove {
                 guild_id: 1,
                 user_id: 2,

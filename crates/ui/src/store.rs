@@ -165,6 +165,8 @@ pub struct Store {
     pub uploads: Signal<HashMap<String, Vec<PendingUpload>>>,
     /// Gerade wird eine Datei über den Chat gezogen.
     pub dragging: Signal<bool>,
+    /// Ungelesen-Stand pro Server (Guild-ID → Stand) für die Server-Leiste.
+    pub guild_unread: Signal<HashMap<String, GuildUnread>>,
 }
 
 impl Store {
@@ -201,6 +203,7 @@ impl Store {
             members_open: Signal::new(members_open),
             uploads: Signal::new(HashMap::new()),
             dragging: Signal::new(false),
+            guild_unread: Signal::new(HashMap::new()),
         }
     }
 

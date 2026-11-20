@@ -5,9 +5,9 @@
 //! to every subscriber with a per-session sequence number.
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -164,6 +164,26 @@ struct ChannelInfo {
 
 const CHANNEL_INFO_TTL: Duration = Duration::from_secs(30);
 
+/// Höchstens ein `guild_activity` pro Kanal in diesem Abstand.
+const ACTIVITY_WINDOW: Duration = Duration::from_secs(1);
+
+/// Wer im laufenden Fenster noch geschrieben hat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pending {
+    /// Nur diese Person: ihre eigenen Sessions brauchen keinen Hinweis.
+    One(i64),
+    Many,
+}
+
+/// Sendefenster für `guild_activity` eines Kanals.
+struct ActivityWindow {
+    guild_id: i64,
+    sent: Instant,
+    /// Im laufenden Fenster kam noch etwas: am Fensterende nachsenden, sonst
+    /// erführe niemand von der letzten Nachricht einer Serie.
+    pending: Option<Pending>,
+}
+
 /// Shared gateway state. Cloned as `Arc` into every connection task.
 pub struct Gateway {
     db: Db,
@@ -179,6 +199,10 @@ pub struct Gateway {
     channel_info: DashMap<i64, ChannelInfo>,
     /// Letzte Nachricht pro (Kanal, Nutzer) für den Slowmode.
     slowmode_last: DashMap<(i64, i64), Instant>,
+    /// Letztes `guild_activity` pro Kanal (höchstens eins pro Sekunde).
+    activity: DashMap<i64, ActivityWindow>,
+    /// Für Hintergrundaufgaben, die den Gateway brauchen.
+    this: Weak<Gateway>,
 }
 
 impl Gateway {
@@ -189,7 +213,8 @@ impl Gateway {
         metrics: Arc<Metrics>,
         ids: Arc<Snowflake>,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|this| Self {
+            this: this.clone(),
             db,
             cfg,
             tokens,
@@ -201,6 +226,7 @@ impl Gateway {
             guilds: DashMap::new(),
             channel_guilds: DashMap::new(),
             channel_info: DashMap::new(),
+            activity: DashMap::new(),
             slowmode_last: DashMap::new(),
         })
     }
@@ -212,6 +238,156 @@ impl Gateway {
     /// Event an alle Abonnenten eines Kanals.
     pub fn publish_channel(&self, channel_id: i64, event: &Event) {
         self.dispatch_channel(channel_id, event);
+    }
+
+    /// Neue Nachricht in einer Guild: Erwähnungen festhalten und
+    /// `guild_activity` an alle Sessions schicken, die den Kanal lesen dürfen
+    /// (außer dem Autor) – höchstens einmal pro Sekunde und Kanal, ohne
+    /// Kanal-ID. Erwähnte bekommen sofort einen eigenen Hinweis
+    /// (`mentioned`), ebenfalls nur mit Leserecht. Den genauen Stand holen
+    /// die Clients per REST.
+    pub async fn message_activity(
+        &self,
+        guild_id: i64,
+        channel_id: i64,
+        message_id: i64,
+        author_id: i64,
+        content: &str,
+    ) {
+        let handles = validate::mentioned_handles(content);
+        if !handles.is_empty() {
+            match self
+                .db
+                .record_mentions(message_id, guild_id, author_id, &handles)
+                .await
+            {
+                Ok(users) => {
+                    let mention = Event::GuildActivity {
+                        guild_id,
+                        mentioned: true,
+                    };
+                    for user_id in users {
+                        let readable = self
+                            .channel_permissions(channel_id, user_id)
+                            .await
+                            .is_some_and(|(_, perms)| {
+                                perms.contains(
+                                    Permissions::VIEW_CHANNEL | Permissions::READ_MESSAGE_HISTORY,
+                                )
+                            });
+                        if readable {
+                            self.publish_user(user_id, &mention);
+                        }
+                    }
+                }
+                Err(err) => warn!(error = %err, "record mentions failed"),
+            }
+        }
+        let now = Instant::now();
+        let send_now = match self.activity.entry(channel_id) {
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(ActivityWindow {
+                    guild_id,
+                    sent: now,
+                    pending: None,
+                });
+                true
+            }
+            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
+                let window = slot.get_mut();
+                if now.duration_since(window.sent) >= ACTIVITY_WINDOW {
+                    window.sent = now;
+                    window.pending = None;
+                    true
+                } else {
+                    window.pending = Some(match window.pending {
+                        None => Pending::One(author_id),
+                        Some(Pending::One(id)) if id == author_id => Pending::One(id),
+                        Some(_) => Pending::Many,
+                    });
+                    false
+                }
+            }
+        };
+        if send_now && let Some(gateway) = self.this.upgrade() {
+            // Im Hintergrund: die Rechteprüfung pro Session soll den Absender
+            // nicht aufhalten.
+            tokio::spawn(async move {
+                gateway
+                    .dispatch_activity(guild_id, channel_id, Some(author_id))
+                    .await;
+            });
+        }
+    }
+
+    /// `guild_activity` an alle Sessions der Guild, die den Kanal lesen dürfen
+    /// – außer denen von `skip_user` (eigene Nachrichten sind nie ungelesen).
+    /// Die Rechte kommen aus dem 30-s-Cache, den auch das Senden nutzt.
+    async fn dispatch_activity(&self, guild_id: i64, channel_id: i64, skip_user: Option<i64>) {
+        let event = Event::GuildActivity {
+            guild_id,
+            mentioned: false,
+        };
+        let Ok(body) = rmp_serde::to_vec_named(&event) else {
+            return;
+        };
+        let body = Bytes::from(body);
+        let ids: Vec<String> = match self.guilds.get(&guild_id) {
+            Some(set) => set.iter().cloned().collect(),
+            None => return,
+        };
+        let sessions: Vec<Arc<Session>> = ids
+            .iter()
+            .filter_map(|id| self.sessions.get(id).map(|entry| Arc::clone(entry.value())))
+            .collect();
+        let mut readable: HashMap<i64, bool> = HashMap::new();
+        for session in sessions {
+            let user_id = session.user.id;
+            if skip_user == Some(user_id) {
+                continue;
+            }
+            let allowed = match readable.get(&user_id) {
+                Some(allowed) => *allowed,
+                None => {
+                    let allowed = self
+                        .perms
+                        .get(&self.db, guild_id, user_id, Some(channel_id))
+                        .await
+                        .is_ok_and(|perms| {
+                            perms.contains(
+                                Permissions::VIEW_CHANNEL | Permissions::READ_MESSAGE_HISTORY,
+                            )
+                        });
+                    readable.insert(user_id, allowed);
+                    allowed
+                }
+            };
+            if allowed {
+                self.push_dispatch(&session, &body);
+            }
+        }
+    }
+
+    /// Aufgeschobene `guild_activity` verschicken, deren Fenster abgelaufen ist.
+    async fn flush_activity(&self) {
+        let now = Instant::now();
+        let mut due = Vec::new();
+        for mut window in self.activity.iter_mut() {
+            if let Some(pending) = window.pending
+                && now.duration_since(window.sent) >= ACTIVITY_WINDOW
+            {
+                window.sent = now;
+                window.pending = None;
+                let skip = match pending {
+                    Pending::One(user_id) => Some(user_id),
+                    Pending::Many => None,
+                };
+                due.push((window.guild_id, *window.key(), skip));
+            }
+        }
+        for (guild_id, channel_id, skip) in due {
+            self.dispatch_activity(guild_id, channel_id, skip).await;
+        }
     }
 
     /// Event an alle verbundenen Mitglieder einer Guild.
@@ -370,6 +546,15 @@ impl Gateway {
 
     /// Remove sessions whose resume window expired, and sweep stale caches.
     pub fn spawn_janitor(self: &Arc<Self>) {
+        let flusher = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(ACTIVITY_WINDOW / 2);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                flusher.flush_activity().await;
+            }
+        });
         let gateway = Arc::clone(self);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(15));
@@ -380,6 +565,9 @@ impl Gateway {
                 gateway
                     .slowmode_last
                     .retain(|_, at| at.elapsed() < Duration::from_secs(21_600));
+                gateway.activity.retain(|_, window| {
+                    window.pending.is_some() || window.sent.elapsed() < Duration::from_secs(60)
+                });
                 let ttl_ms = gateway.cfg.resume_ttl.as_millis() as i64;
                 let now = now_ms();
                 let expired: Vec<String> = gateway
@@ -716,7 +904,7 @@ impl Gateway {
                     self.send_error(session, "rate_limited", "slow down", Some(nonce));
                     return;
                 }
-                let Some((_guild_id, perms)) = self.channel_permissions(channel_id, user_id).await
+                let Some((guild_id, perms)) = self.channel_permissions(channel_id, user_id).await
                 else {
                     self.send_error(session, "not_found", "channel not found", Some(nonce));
                     return;
@@ -813,10 +1001,13 @@ impl Gateway {
                         .collect(),
                     pinned: false,
                 };
+                let mention_text = view.content.clone();
                 self.dispatch_channel(channel_id, &Event::MessageCreate { message: view });
                 self.metrics
                     .message_latency
                     .record_us(started.elapsed().as_micros() as u64);
+                self.message_activity(guild_id, channel_id, id, user_id, &mention_text)
+                    .await;
             }
             ClientOp::MessageEdit {
                 nonce,

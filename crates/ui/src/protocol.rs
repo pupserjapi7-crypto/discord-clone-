@@ -258,6 +258,11 @@ pub enum Dispatched {
         pinned: bool,
     },
     Voice(VoiceState),
+    /// Neues in einer Guild (ohne Kanal); `mentioned`: man wurde erwähnt.
+    Activity {
+        guild_id: String,
+        mentioned: bool,
+    },
     Other,
 }
 
@@ -349,6 +354,10 @@ pub fn parse_dispatch(body: &[u8]) -> Option<Dispatched> {
             screen: flag(&data, "screen"),
             camera: flag(&data, "camera"),
         }),
+        "guild_activity" => Dispatched::Activity {
+            guild_id: id(&data, "guild_id"),
+            mentioned: flag(&data, "mentioned"),
+        },
         _ => Dispatched::Other,
     };
     Some(event)
@@ -458,6 +467,10 @@ mod tests {
     fn server_events_parse_including_new_ones() {
         let events = [
             server::Event::GuildUpdate { guild_id: 1 },
+            server::Event::GuildActivity {
+                guild_id: 9_007_199_254_740_993,
+                mentioned: true,
+            },
             server::Event::MessagePin {
                 channel_id: 2,
                 message_id: 3,
@@ -480,6 +493,16 @@ mod tests {
             match (event, parsed) {
                 (server::Event::GuildUpdate { .. }, Dispatched::GuildUpdate { guild_id }) => {
                     assert_eq!(guild_id, "1");
+                }
+                (
+                    server::Event::GuildActivity { .. },
+                    Dispatched::Activity {
+                        guild_id,
+                        mentioned,
+                    },
+                ) => {
+                    assert_eq!(guild_id, "9007199254740993");
+                    assert!(mentioned);
                 }
                 (server::Event::MessagePin { .. }, Dispatched::Pin { pinned, .. }) => {
                     assert!(pinned)

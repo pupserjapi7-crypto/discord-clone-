@@ -72,7 +72,9 @@ pub fn Shell() -> Element {
     }
 }
 
-/// Strg/⌘+K, Esc, Push-to-Talk, Strg+Umschalt+M (stumm).
+/// Strg/⌘+K, Esc, Push-to-Talk, Strg+Umschalt+M (stumm); dazu der
+/// Ungelesen-Stand, wenn das Fenster wieder in den Vordergrund kommt (gelesen
+/// wurde vielleicht auf einem anderen Gerät).
 fn use_global_shortcuts(store: Store) {
     use_hook(move || {
         let mut store = store;
@@ -114,15 +116,23 @@ fn use_global_shortcuts(store: Store) {
                 push_to_talk(store, &event, false);
             },
         );
+        let focus = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
+            if store.user.read().is_some() {
+                actions::load_unread_throttled(store);
+            }
+        });
         if let Some(window) = web_sys::window() {
             let _ = window
                 .add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref());
             let _ =
                 window.add_event_listener_with_callback("keyup", keyup.as_ref().unchecked_ref());
+            let _ =
+                window.add_event_listener_with_callback("focus", focus.as_ref().unchecked_ref());
         }
-        // Lebt so lange wie die App; ein Fenster, ein Listener-Paar.
+        // Lebt so lange wie die App; ein Fenster, je ein Listener.
         keydown.forget();
         keyup.forget();
+        focus.forget();
     });
 }
 
@@ -166,6 +176,7 @@ fn ServerRail() -> Element {
     let mut store = use_store();
     let guilds = store.guilds.read().clone();
     let current = store.detail.read().as_ref().map(|d| d.guild.id.clone());
+    let unread = store.guild_unread.read().clone();
     rsx! {
         nav { class: "nv-rail", "aria-label": "Server",
             span { class: "nv-rail__home", title: "Nova", Icon { name: "logo", size: 22 } }
@@ -174,18 +185,30 @@ fn ServerRail() -> Element {
                 {
                     let active = current.as_deref() == Some(guild.id.as_str());
                     let id = guild.id.clone();
+                    let state = unread.get(&guild.id);
+                    let mentions = state.map_or(0, |state| state.mentions);
+                    // Im offenen Server zeigt die Kanalliste, was neu ist.
+                    let dot = !active && mentions == 0 && state.is_some_and(|state| state.unread);
+                    let label = rail_label(&guild.name, mentions, dot);
                     rsx! {
                         div { key: "{guild.id}", class: classes(&["nv-rail__item", if active { "is-active" } else { "" }]),
                             button {
                                 class: "nv-rail__btn",
-                                title: "{guild.name}",
-                                "aria-label": "{guild.name}",
+                                title: "{label}",
+                                "aria-label": "{label}",
                                 "aria-current": if active { "page" } else { "false" },
                                 onclick: move |_| {
                                     let id = id.clone();
                                     spawn(actions::open_guild(store, id));
                                 },
                                 "{crate::components::initials(&guild.name)}"
+                            }
+                            if mentions > 0 {
+                                span { class: "nv-count nv-rail__count", "aria-hidden": "true",
+                                    if mentions > 99 { "99+" } else { "{mentions}" }
+                                }
+                            } else if dot {
+                                span { class: "nv-rail__dot", "aria-hidden": "true" }
                             }
                         }
                     }
@@ -201,6 +224,17 @@ fn ServerRail() -> Element {
                 }
             }
         }
+    }
+}
+
+/// Name plus Ungelesen-Stand für Screenreader und Tooltip (Punkt und Zahl
+/// selbst sind `aria-hidden`).
+fn rail_label(name: &str, mentions: i64, unread: bool) -> String {
+    match mentions {
+        0 if unread => format!("{name}, ungelesen"),
+        0 => name.to_owned(),
+        1 => format!("{name}, 1 Erwähnung"),
+        n => format!("{name}, {n} Erwähnungen"),
     }
 }
 

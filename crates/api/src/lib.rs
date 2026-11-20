@@ -80,6 +80,7 @@ pub fn router(state: AppState) -> Router {
             "/api/v1/dms/{dm_id}/attachments",
             post(uploads::upload_to_dm),
         )
+        .route("/api/v1/users/@me/unread", get(unread_summary))
         .route("/api/v1/guilds", get(list_guilds).post(create_guild))
         .route("/api/v1/guilds/{guild_id}", get(get_guild))
         .route("/api/v1/guilds/{guild_id}/channels", post(create_channel))
@@ -618,6 +619,59 @@ async fn list_guilds(State(state): State<AppState>, auth: Auth) -> ApiResult<Jso
         })
         .collect();
     Ok(json_ids(&summaries))
+}
+
+#[derive(Debug, Serialize)]
+struct GuildUnread {
+    guild_id: i64,
+    /// Mindestens ein sichtbarer Kanal hat Ungelesenes.
+    unread: bool,
+    /// Ungelesene Erwähnungen in sichtbaren Kanälen.
+    mentions: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct UnreadQuery {
+    /// Nur diesen Server (Clients fragen nach `guild_activity` gezielt nach).
+    guild_id: Option<i64>,
+}
+
+/// Ungelesen-Stand der eigenen Server für die Server-Leiste. Zählt nur
+/// Kanäle, die man sehen und deren Verlauf man lesen darf. Fremde Server
+/// tauchen nicht auf, auch nicht mit `?guild_id=`.
+async fn unread_summary(
+    State(state): State<AppState>,
+    auth: Auth,
+    Query(query): Query<UnreadQuery>,
+) -> ApiResult<Json<Value>> {
+    let mut summary = Vec::new();
+    let guilds = state.db.guilds_for_user(auth.user_id).await?;
+    for guild in guilds
+        .into_iter()
+        .filter(|guild| query.guild_id.is_none_or(|id| id == guild.id))
+    {
+        let channels: Vec<i64> = state
+            .db
+            .channel_permissions(guild.id, auth.user_id)
+            .await?
+            .into_iter()
+            .filter(|(channel, perms)| {
+                (channel.kind == nova_db::models::CHANNEL_TEXT
+                    || channel.kind == nova_db::models::CHANNEL_THREAD)
+                    && perms.contains(Permissions::VIEW_CHANNEL)
+                    && perms.contains(Permissions::READ_MESSAGE_HISTORY)
+                    && !(channel.kind == nova_db::models::CHANNEL_THREAD && channel.archived)
+            })
+            .map(|(channel, _)| channel.id)
+            .collect();
+        let rows = state.db.unread_mentions(auth.user_id, &channels).await?;
+        summary.push(GuildUnread {
+            guild_id: guild.id,
+            unread: rows.iter().any(|(_, unread, _)| *unread),
+            mentions: rows.iter().map(|(_, _, mentions)| mentions).sum(),
+        });
+    }
+    Ok(json_ids(&summary))
 }
 
 #[derive(Debug, Deserialize)]

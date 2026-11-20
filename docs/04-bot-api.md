@@ -50,6 +50,7 @@ bei Menschen: Rollen, Kanal-Overrides, Timeouts.
 |---|---|---|
 | `GET` | `/api/v1/guilds` | – |
 | `GET` | `/api/v1/guilds/{id}` | Mitglied |
+| `GET` | `/api/v1/users/@me/unread?guild_id=` | – (nur eigene Server, nur sichtbare Kanäle) |
 | `GET` | `/api/v1/channels/{id}/messages?before=&limit=` | `READ_MESSAGE_HISTORY` |
 | `POST` | `/api/v1/channels/{id}/messages` `{content, reply_to?, attachment_ids?}` | `SEND_MESSAGES` (+ `ATTACH_FILES` mit Anhängen) |
 | `POST` | `/api/v1/channels/{id}/attachments?filename=` (roher Body) | `SEND_MESSAGES` + `ATTACH_FILES` |
@@ -169,9 +170,26 @@ Server-Typen.
 | `message_pin` | `channel_id`, `message_id`, `pinned` | 0.4 |
 | `voice_state_update` | `guild_id`, `channel_id`, `user_id`, `connected`, `muted`, `deafened`, `screen`, `camera` (ab 0.8) | 0.4 |
 | `dm_message_create` | `message` (`channel_id` = DM-Kanal) – nur an beide Beteiligten; Bots haben keine DMs | 0.6 |
+| `guild_activity` | `guild_id`, `mentioned` – „hier gibt es Neues für dich“, ohne Kanal; Stand per `GET /users/@me/unread` | 0.8 |
 
 Unbekannte Events müssen ignoriert werden – der Server fügt neue hinzu, ohne
 die Protokollversion zu ändern.
+
+`guild_activity` kommt nach neuen Nachrichten an alle Sessions, die den Kanal
+sehen und seinen Verlauf lesen dürfen – nie an den Autor selbst. Pro Kanal
+höchstens eins pro Sekunde; was innerhalb der Sekunde passiert, wird am Ende
+nachgereicht. Es nennt keinen Kanal (Clients brauchen ihn für die
+Server-Leiste nicht). Mit `mentioned: true` geht es sofort und nur an
+Erwähnte (`@handle` im Text). Den genauen Stand liefert
+`GET /api/v1/users/@me/unread` (optional `?guild_id=`):
+
+```json
+[{"guild_id":"…","unread":true,"mentions":2}]
+```
+
+`unread` heißt: mindestens ein sichtbarer Text-/Thread-Kanal hat Nachrichten
+nach dem eigenen Lesestand; `mentions` zählt ungelesene Erwähnungen. Eigene
+Nachrichten setzen den Lesestand mit, Selbst-Erwähnungen zählen nicht.
 
 ## 6. Beispiel ausführen
 

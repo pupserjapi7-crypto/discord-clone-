@@ -284,6 +284,25 @@ fn mock_store(screen: &str) -> Store {
         },
     ]);
     store.guilds_loaded.set(true);
+    // Server-Leiste: einer mit Erwähnungen, einer nur ungelesen.
+    store.guild_unread.set(HashMap::from([
+        (
+            "2".to_owned(),
+            GuildUnread {
+                guild_id: "2".into(),
+                unread: true,
+                mentions: 3,
+            },
+        ),
+        (
+            "3".to_owned(),
+            GuildUnread {
+                guild_id: "3".into(),
+                unread: true,
+                mentions: 0,
+            },
+        ),
+    ]));
     store.detail.set(Some(detail));
     store.history.set(history);
     store.voice_rooms.write().insert("20".into(), lounge);

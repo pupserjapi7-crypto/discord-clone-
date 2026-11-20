@@ -83,6 +83,11 @@ const QUICK_REACTIONS: [&str; 5] = ["👍", "❤️", "😂", "🎉", "👀"];
 
 /// Wie lange „… schreibt“ ohne neues Signal sichtbar bleibt.
 const TYPING_TTL: Duration = Duration::from_secs(6);
+/// Wartezeit nach einem Anstoß für die Server-Leiste: eine Serie von
+/// Nachrichten ergibt eine Anfrage.
+const UNREAD_DEBOUNCE: Duration = Duration::from_millis(1500);
+/// Komplett-Abfrage bei Fensterfokus höchstens so oft.
+const UNREAD_FOCUS_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct ChatMessage {
@@ -275,6 +280,12 @@ struct App {
     editing: Option<(i64, String)>,
     /// Kanäle mit ungelesenen Nachrichten.
     unread: HashSet<i64>,
+    /// Ungelesen-Stand pro Server für die Leiste.
+    guild_unread: HashMap<i64, api::GuildUnread>,
+    /// Server, deren Stand gleich (entprellt) neu geholt wird.
+    unread_pending: HashSet<i64>,
+    /// Letzte Komplett-Abfrage (gegen Fokus-Gewitter).
+    unread_loaded: Option<Instant>,
     /// Wer gerade wo tippt (Kanal → Nutzer → Name, letztes Signal).
     typing: HashMap<i64, HashMap<i64, (String, Instant)>>,
     last_typing_sent: Option<Instant>,
@@ -401,6 +412,12 @@ enum Message {
     DevicesLoaded((Vec<String>, Vec<String>)),
     Key(keyboard::Event),
     Tick,
+    /// Ungelesen-Stand: aller Server (`None`) oder eines Servers.
+    UnreadLoaded(Option<i64>, Result<Vec<api::GuildUnread>, String>),
+    /// Entprellte Abfrage für diesen Server ist fällig.
+    RefreshUnread(i64),
+    /// Fenster ist wieder im Vordergrund.
+    WindowFocused,
     Ignore,
 }
 
@@ -456,6 +473,9 @@ impl App {
             confirm: None,
             editing: None,
             unread: HashSet::new(),
+            guild_unread: HashMap::new(),
+            unread_pending: HashSet::new(),
+            unread_loaded: None,
             typing: HashMap::new(),
             last_typing_sent: None,
             history_complete: HashSet::new(),
@@ -516,7 +536,11 @@ impl App {
             api: self.api.clone(),
         })
         .map(Message::Gateway);
-        let mut subs = vec![gateway, keyboard::listen().map(Message::Key)];
+        let focus = iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused),
+            _ => None,
+        });
+        let mut subs = vec![gateway, keyboard::listen().map(Message::Key), focus];
         if self.voice.is_some() {
             // Sprecher-Ring und Status fünfmal pro Sekunde; läuft ein Stream,
             // so oft wie Bilder kommen (30 fps).
@@ -560,21 +584,70 @@ impl App {
     }
 
     /// Lesestand des offenen Kanals auf die neueste Nachricht setzen.
-    fn mark_read(&mut self) {
+    fn mark_read(&mut self) -> Task<Message> {
         let Some(channel_id) = self.channel else {
-            return;
+            return Task::none();
         };
         self.unread.remove(&channel_id);
-        if let Some(message_id) = self
+        let Some(message_id) = self
             .history
             .get(&channel_id)
             .and_then(|list| list.iter().rev().find_map(|m| m.id))
-        {
-            self.send_gateway(Command::ReadAck {
-                channel_id,
-                message_id,
-            });
+        else {
+            return Task::none();
+        };
+        self.send_gateway(Command::ReadAck {
+            channel_id,
+            message_id,
+        });
+        // Erwähnungen im offenen Server sind vielleicht gerade gelesen worden;
+        // die Lesebestätigung läuft übers Gateway, also entprellt nachfragen.
+        match self.detail.as_ref().map(|d| d.guild.id) {
+            Some(guild_id)
+                if self
+                    .guild_unread
+                    .get(&guild_id)
+                    .is_some_and(|state| state.mentions > 0) =>
+            {
+                self.schedule_unread(guild_id)
+            }
+            _ => Task::none(),
         }
+    }
+
+    /// Stand aller Server holen (neue Gateway-Session, Fenster im Fokus).
+    fn load_unread(&mut self) -> Task<Message> {
+        self.unread_loaded = Some(Instant::now());
+        let api = self.api.clone();
+        Task::perform(async move { api.unread(None).await }, |result| {
+            Message::UnreadLoaded(None, result)
+        })
+    }
+
+    fn refresh_unread(&self, guild_id: i64) -> Task<Message> {
+        let api = self.api.clone();
+        Task::perform(
+            async move { api.unread(Some(guild_id)).await },
+            move |result| Message::UnreadLoaded(Some(guild_id), result),
+        )
+    }
+
+    /// Einen Server entprellt neu abfragen.
+    fn schedule_unread(&mut self, guild_id: i64) -> Task<Message> {
+        if !self.unread_pending.insert(guild_id) {
+            return Task::none();
+        }
+        Task::perform(tokio::time::sleep(UNREAD_DEBOUNCE), move |()| {
+            Message::RefreshUnread(guild_id)
+        })
+    }
+
+    /// Server, der gerade in der Leiste als offen markiert ist.
+    fn open_guild_id(&self) -> Option<i64> {
+        self.detail
+            .as_ref()
+            .map(|d| d.guild.id)
+            .filter(|_| !self.home)
     }
 
     /// Wirksame Stummschaltung: Knopf oder Push-to-Talk-Taste nicht gedrückt.
@@ -888,7 +961,7 @@ impl App {
                 }
                 self.history.insert(id, fresh);
                 if self.channel == Some(id) {
-                    self.mark_read();
+                    return self.mark_read();
                 }
             }
             Message::GuildsLoaded(Err(err))
@@ -986,6 +1059,9 @@ impl App {
                 self.modal = None;
                 self.editing = None;
                 self.unread.clear();
+                self.guild_unread.clear();
+                self.unread_pending.clear();
+                self.unread_loaded = None;
                 self.typing.clear();
                 self.history_complete.clear();
                 self.pending.clear();
@@ -1365,15 +1441,57 @@ impl App {
 
             // --- Direktnachrichten ---------------------------------------
             Message::OpenHome => {
+                // Solange ein Server offen ist, pflegt die Leiste seinen Punkt
+                // nicht; beim Verlassen deshalb einmal nachfragen.
+                let left = self.open_guild_id();
                 self.home = true;
                 self.editing = None;
                 let api = self.api.clone();
-                return Task::perform(async move { api.dms().await }, Message::DmsLoaded);
+                let dms = Task::perform(async move { api.dms().await }, Message::DmsLoaded);
+                return match left {
+                    Some(guild_id) => Task::batch([dms, self.refresh_unread(guild_id)]),
+                    None => dms,
+                };
             }
             Message::SelectGuild(id) => {
+                let left = self.open_guild_id().filter(|open| *open != id);
                 self.home = false;
                 self.editing = None;
-                return self.update(Message::OpenGuild(id));
+                let open = self.update(Message::OpenGuild(id));
+                return match left {
+                    Some(guild_id) => Task::batch([open, self.refresh_unread(guild_id)]),
+                    None => open,
+                };
+            }
+            Message::UnreadLoaded(None, Ok(list)) => {
+                self.guild_unread = list
+                    .into_iter()
+                    .map(|state| (state.guild_id, state))
+                    .collect();
+            }
+            Message::UnreadLoaded(Some(guild_id), Ok(list)) => {
+                match list.into_iter().find(|state| state.guild_id == guild_id) {
+                    Some(state) => {
+                        self.guild_unread.insert(guild_id, state);
+                    }
+                    None => {
+                        self.guild_unread.remove(&guild_id);
+                    }
+                }
+            }
+            // Der nächste Anstoß versucht es wieder; kein Fehlerbanner für die Leiste.
+            Message::UnreadLoaded(_, Err(_)) => {}
+            Message::RefreshUnread(guild_id) => {
+                self.unread_pending.remove(&guild_id);
+                return self.refresh_unread(guild_id);
+            }
+            Message::WindowFocused => {
+                let stale = self
+                    .unread_loaded
+                    .is_none_or(|at| at.elapsed() >= UNREAD_FOCUS_INTERVAL);
+                if stale {
+                    return self.load_unread();
+                }
             }
             Message::DmsLoaded(Ok(list)) => {
                 self.dms = list;
@@ -1914,11 +2032,17 @@ impl App {
                 self.status = status;
             }
             GatewayEvent::Hello { guilds, .. } => {
+                // Neue Session: verpasste `guild_activity` gibt es nicht, also
+                // den Stand der Server-Leiste komplett holen.
+                let unread = self.load_unread();
                 // Neue oder entfernte Server seit dem letzten REST-Abruf übernehmen.
                 if guilds.len() != self.guilds.len() {
                     let api = self.api.clone();
-                    return Task::perform(async move { api.guilds().await }, Message::GuildsLoaded);
+                    let list =
+                        Task::perform(async move { api.guilds().await }, Message::GuildsLoaded);
+                    return Task::batch([unread, list]);
                 }
+                return unread;
             }
             GatewayEvent::Event(event) => match *event {
                 Event::MessageCreate { message } => {
@@ -1936,7 +2060,7 @@ impl App {
                         people.remove(&author);
                     }
                     if self.channel == Some(channel_id) {
-                        self.mark_read();
+                        return self.mark_read();
                     } else if author != self.me_id() {
                         self.unread.insert(channel_id);
                     }
@@ -2071,6 +2195,29 @@ impl App {
                     // Teilnehmerliste dieses Kanals neu holen statt zu pollen.
                     return self.load_room(channel_id);
                 }
+                Event::GuildActivity {
+                    guild_id,
+                    mentioned,
+                } => {
+                    // Kommt nur mit Leserecht und nie für eigene Nachrichten:
+                    // der Punkt lässt sich ohne Nachfrage setzen, nur die
+                    // Erwähnungs-Zahl kommt vom Server.
+                    if mentioned {
+                        return self.schedule_unread(guild_id);
+                    }
+                    // Offener Server: die Kanalliste zeigt Neues; beim
+                    // Verlassen wird nachgefragt.
+                    if self.open_guild_id() != Some(guild_id) {
+                        self.guild_unread
+                            .entry(guild_id)
+                            .or_insert(api::GuildUnread {
+                                guild_id,
+                                unread: false,
+                                mentions: 0,
+                            })
+                            .unread = true;
+                    }
+                }
                 _ => {}
             },
             GatewayEvent::Ack { nonce, id } => {
@@ -2093,9 +2240,11 @@ impl App {
             }
             GatewayEvent::Error(err) => self.error = Some(err),
             GatewayEvent::Resync => {
+                let unread = self.load_unread();
                 if let Some(id) = self.channel {
-                    return self.update(Message::OpenChannel(id));
+                    return Task::batch([unread, self.update(Message::OpenChannel(id))]);
                 }
+                return unread;
             }
             GatewayEvent::SessionExpired => return self.update(Message::LoggedOut),
         }
@@ -2931,22 +3080,58 @@ impl App {
             .filter(|_| !self.home);
         let guilds = self.guilds.iter().map(|guild| {
             let active = current == Some(guild.id);
+            let state = self.guild_unread.get(&guild.id);
+            let mentions = state.map_or(0, |state| state.mentions);
+            // Im offenen Server zeigt die Kanalliste, was neu ist.
+            let dot = !active && mentions == 0 && state.is_some_and(|state| state.unread);
+            let mut face = stack![
+                text(initials(&guild.name))
+                    .size(15)
+                    .font(style::BOLD)
+                    .center()
+                    .width(Fill)
+                    .height(Fill)
+                    .color(style::TEXT)
+            ];
+            // Punkt bzw. Zahl unten rechts in der Ecke, wie im Web.
+            let corner = |badge: Element<'static, Message>| {
+                container(badge)
+                    .width(Fill)
+                    .height(Fill)
+                    .align_x(iced::alignment::Horizontal::Right)
+                    .align_y(iced::alignment::Vertical::Bottom)
+            };
+            if mentions > 0 {
+                let count = if mentions > 99 {
+                    "99+".to_owned()
+                } else {
+                    mentions.to_string()
+                };
+                face = face.push(corner(
+                    container(text(count).size(11).font(style::BOLD))
+                        .height(22)
+                        .padding([0, 7])
+                        .align_y(iced::Center)
+                        .style(style::mention_badge)
+                        .into(),
+                ));
+            } else if dot {
+                face = face.push(corner(
+                    container(space())
+                        .width(14)
+                        .height(14)
+                        .style(style::rail_dot)
+                        .into(),
+                ));
+            }
             tip(
-                button(
-                    text(initials(&guild.name))
-                        .size(15)
-                        .font(style::BOLD)
-                        .center()
-                        .width(Fill)
-                        .height(Fill)
-                        .color(style::TEXT),
-                )
-                .width(44)
-                .height(44)
-                .padding(0)
-                .on_press(Message::SelectGuild(guild.id))
-                .style(move |theme, status| style::rail_button(theme, status, active)),
-                guild.name.as_str(),
+                button(face)
+                    .width(44)
+                    .height(44)
+                    .padding(0)
+                    .on_press(Message::SelectGuild(guild.id))
+                    .style(move |theme, status| style::rail_button(theme, status, active)),
+                rail_label(&guild.name, mentions, dot),
                 tooltip::Position::Right,
             )
         });
@@ -4577,6 +4762,16 @@ fn field<'a>(label: &'a str, input: impl Into<Element<'a, Message>>) -> Element<
     column![text(label).size(13).color(style::MUTED), input.into()]
         .spacing(6)
         .into()
+}
+
+/// Name plus Ungelesen-Stand für den Tooltip der Server-Leiste.
+fn rail_label(name: &str, mentions: i64, unread: bool) -> String {
+    match mentions {
+        0 if unread => format!("{name}, ungelesen"),
+        0 => name.to_owned(),
+        1 => format!("{name}, 1 Erwähnung"),
+        n => format!("{name}, {n} Erwähnungen"),
+    }
 }
 
 fn tip<'a>(

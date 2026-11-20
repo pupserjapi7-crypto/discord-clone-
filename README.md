@@ -13,6 +13,7 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 | Moderation | **fertig** — Rollen & Kanal-Overrides (mit Rechte-Editor), Kick, Bann, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log mit UI |
 | Foren & Webhooks | **neu (0.8)** — Forum-Kanäle (Beiträge als Threads), eingehende Webhooks pro Textkanal |
 | Threads | **fertig** — aus Nachricht starten, Seitenleiste, Archivieren, Ungelesen-Stand |
+| Ungelesen | **neu (0.8)** — Punkt pro Kanal und pro Server, Erwähnungs-Zahl (`@handle`) in der Server-Leiste (Web und nativ), nur sichtbare Kanäle zählen |
 | Direktnachrichten | **neu (0.6)** — über den Benutzernamen, live über das Gateway; im nativen Client, Web-App folgt |
 | Uploads | **neu (0.8)** — „+“, Ziehen & Ablegen, Einfügen (Web) bzw. Dateidialog (nativ); Bilder inline ohne EXIF/GPS, Dateien als Download; content-addressed `BlobStore`, Quota pro Server, Backup im Installer |
 | Bot-API | **fertig** — `nb_`-Tokens für REST + Gateway, Doku `docs/04-bot-api.md`, Beispiel `examples/echo-bot` |

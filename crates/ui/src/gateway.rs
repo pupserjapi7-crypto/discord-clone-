@@ -211,6 +211,11 @@ async fn run(token: String, mut store: Store, mut rx: UnboundedReceiver<Command>
                                     last_seq = hello.seq;
                                     heartbeat_ms = (hello.heartbeat_secs.max(5) * 1000).min(30_000);
                                 }
+                                // Neue Session: verpasste `guild_activity` gibt es
+                                // nicht, also den Stand der Server-Leiste holen.
+                                if frame.op == protocol::OP_HELLO_OK {
+                                    spawn(actions::load_unread(store));
+                                }
                                 online = true;
                                 attempt = 0;
                                 store.status.set(ConnStatus::Online);
@@ -241,6 +246,7 @@ async fn run(token: String, mut store: Store, mut rx: UnboundedReceiver<Command>
                             }
                             protocol::OP_RESYNC => {
                                 last_seq = 0;
+                                spawn(actions::load_unread(store));
                                 if let Some(id) = store.channel_id.read().clone() {
                                     spawn(actions::reload_history(store, id));
                                 }
@@ -378,7 +384,7 @@ fn handle_dispatch(event: Dispatched, mut store: Store) {
             history.messages.push(message.clone());
             drop(histories);
             if visible {
-                spawn(actions::mark_read(channel_id, message.id));
+                spawn(actions::mark_read(store, channel_id, message.id));
             }
         }
         Dispatched::Updated(message) => {
@@ -490,6 +496,10 @@ fn handle_dispatch(event: Dispatched, mut store: Store) {
             }
         }
         Dispatched::Voice(state) => actions::apply_voice_state(store, state),
+        Dispatched::Activity {
+            guild_id,
+            mentioned,
+        } => actions::guild_activity(store, guild_id, mentioned),
         Dispatched::Other => {}
     }
 }

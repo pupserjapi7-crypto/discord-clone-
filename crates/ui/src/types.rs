@@ -88,6 +88,17 @@ pub struct Role {
     pub is_everyone: bool,
 }
 
+/// Ungelesen-Stand eines Servers für die Server-Leiste
+/// (`GET /users/@me/unread`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct GuildUnread {
+    pub guild_id: String,
+    #[serde(default)]
+    pub unread: bool,
+    #[serde(default)]
+    pub mentions: i64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct Unread {
     pub channel_id: String,

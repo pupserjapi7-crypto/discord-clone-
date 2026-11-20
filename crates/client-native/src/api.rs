@@ -154,6 +154,18 @@ pub struct Unread {
     pub last_read_id: Option<i64>,
 }
 
+/// Ungelesen-Stand eines Servers für die Server-Leiste
+/// (`GET /users/@me/unread`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GuildUnread {
+    #[serde(deserialize_with = "id")]
+    pub guild_id: i64,
+    #[serde(default)]
+    pub unread: bool,
+    #[serde(default)]
+    pub mentions: i64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct GuildDetail {
     pub guild: Guild,
@@ -431,6 +443,15 @@ impl Api {
     pub async fn guilds(&self) -> Result<Vec<Guild>, String> {
         self.request(reqwest::Method::GET, "/api/v1/guilds", None)
             .await
+    }
+
+    /// Ungelesen-Stand aller eigenen Server, oder nur eines.
+    pub async fn unread(&self, guild: Option<i64>) -> Result<Vec<GuildUnread>, String> {
+        let path = match guild {
+            Some(id) => format!("/api/v1/users/@me/unread?guild_id={id}"),
+            None => "/api/v1/users/@me/unread".to_owned(),
+        };
+        self.request(reqwest::Method::GET, &path, None).await
     }
 
     pub async fn guild(&self, id: i64) -> Result<GuildDetail, String> {

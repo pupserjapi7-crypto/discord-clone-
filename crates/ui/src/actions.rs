@@ -1,9 +1,14 @@
 //! Abläufe, die Views auslösen: laden, senden, moderieren, Voice.
 //! Alles hier schreibt nur in den `Store`; Views lesen daraus.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use dioxus::{core::spawn_forever, prelude::*};
+use gloo_timers::future::TimeoutFuture;
 
 use crate::{
     api,
@@ -59,6 +64,7 @@ pub async fn logout(mut store: Store) {
     store.history.write().clear();
     store.voice.set(Default::default());
     store.voice_rooms.write().clear();
+    store.guild_unread.write().clear();
     store.status.set(ConnStatus::Offline);
     store.overlay.set(Overlay::None);
 }
@@ -102,6 +108,17 @@ pub async fn load_guilds(mut store: Store) {
 }
 
 pub async fn open_guild(mut store: Store, guild_id: String) {
+    // Solange ein Server offen ist, pflegt die Leiste seinen Punkt nicht;
+    // beim Verlassen deshalb einmal nachfragen.
+    let previous = store
+        .detail
+        .read()
+        .as_ref()
+        .map(|detail| detail.guild.id.clone())
+        .filter(|id| *id != guild_id);
+    if let Some(previous) = previous {
+        spawn_forever(refresh_unread(store, previous));
+    }
     store.guild_loading.set(true);
     store.thread_id.set(None);
     store.pins.set(None);
@@ -238,7 +255,7 @@ async fn load_history(mut store: Store, channel_id: String) {
             history.complete = complete;
             drop(histories);
             if let Some(last) = last {
-                mark_read(channel_id.clone(), last.clone()).await;
+                mark_read(store, channel_id.clone(), last.clone()).await;
                 if let Some(detail) = store.detail.write().as_mut()
                     && let Some(unread) = detail
                         .unread
@@ -292,8 +309,121 @@ pub async fn load_older(mut store: Store, channel_id: String) {
     }
 }
 
-pub async fn mark_read(channel_id: String, message_id: String) {
-    let _ = api::ack(&channel_id, &message_id).await;
+pub async fn mark_read(store: Store, channel_id: String, message_id: String) {
+    if api::ack(&channel_id, &message_id).await.is_err() {
+        return;
+    }
+    // Erwähnungen im offenen Server sind vielleicht gerade gelesen worden.
+    let open = store
+        .detail
+        .read()
+        .as_ref()
+        .map(|detail| detail.guild.id.clone());
+    if let Some(guild_id) = open {
+        let mentioned = store
+            .guild_unread
+            .read()
+            .get(&guild_id)
+            .is_some_and(|state| state.mentions > 0);
+        if mentioned {
+            schedule_unread(store, guild_id);
+        }
+    }
+}
+
+// ------------------------------------------------- Ungelesen pro Server
+
+thread_local! {
+    /// Server, deren Stand gleich (entprellt) neu geholt wird.
+    static UNREAD_PENDING: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// Zeitpunkt (ms) der letzten Komplett-Abfrage, gegen Fokus-Gewitter.
+    static UNREAD_LOADED_MS: Cell<f64> = const { Cell::new(0.0) };
+}
+
+/// Wartezeit nach einem Anstoß: eine Serie von Nachrichten ergibt eine Anfrage.
+const UNREAD_DEBOUNCE_MS: u32 = 1_500;
+
+/// Stand aller Server holen (neue Gateway-Session, Fenster wieder im Fokus).
+pub async fn load_unread(mut store: Store) {
+    UNREAD_LOADED_MS.with(|at| at.set(js_sys::Date::now()));
+    if let Ok(list) = api::unread(None).await {
+        store.guild_unread.set(
+            list.into_iter()
+                .map(|state| (state.guild_id.clone(), state))
+                .collect(),
+        );
+    }
+}
+
+/// Wie [`load_unread`], aber höchstens alle 30 s (Fokuswechsel).
+pub fn load_unread_throttled(store: Store) {
+    let last = UNREAD_LOADED_MS.with(Cell::get);
+    if js_sys::Date::now() - last >= 30_000.0 {
+        spawn_forever(load_unread(store));
+    }
+}
+
+async fn refresh_unread(mut store: Store, guild_id: String) {
+    let Ok(list) = api::unread(Some(&guild_id)).await else {
+        // Der nächste Anstoß versucht es wieder.
+        return;
+    };
+    let mut map = store.guild_unread.write();
+    match list.into_iter().find(|state| state.guild_id == guild_id) {
+        Some(state) => {
+            map.insert(guild_id, state);
+        }
+        None => {
+            map.remove(&guild_id);
+        }
+    }
+}
+
+/// Einen Server entprellt neu abfragen.
+fn schedule_unread(store: Store, guild_id: String) {
+    let fresh = UNREAD_PENDING.with(|pending| pending.borrow_mut().insert(guild_id.clone()));
+    if !fresh {
+        return;
+    }
+    // `spawn_forever`: der Abruf gehört keiner Komponente.
+    spawn_forever(async move {
+        TimeoutFuture::new(UNREAD_DEBOUNCE_MS).await;
+        UNREAD_PENDING.with(|pending| pending.borrow_mut().remove(&guild_id));
+        refresh_unread(store, guild_id).await;
+    });
+}
+
+/// `guild_activity` kommt nur, wenn man den Kanal lesen darf und die
+/// Nachricht nicht von einem selbst ist: der Punkt lässt sich ohne Nachfrage
+/// setzen. Nur für die Erwähnungs-Zahl fragt der Client den Server.
+pub fn guild_activity(mut store: Store, guild_id: String, mentioned: bool) {
+    if mentioned {
+        schedule_unread(store, guild_id);
+        return;
+    }
+    // Im offenen Server zeigt die Kanalliste, was neu ist; beim Verlassen
+    // fragt `open_guild` den Stand ab.
+    let open = store
+        .detail
+        .read()
+        .as_ref()
+        .is_some_and(|detail| detail.guild.id == guild_id);
+    let marked = store
+        .guild_unread
+        .read()
+        .get(&guild_id)
+        .is_some_and(|state| state.unread);
+    if !open && !marked {
+        store
+            .guild_unread
+            .write()
+            .entry(guild_id.clone())
+            .or_insert_with(|| GuildUnread {
+                guild_id,
+                ..GuildUnread::default()
+            })
+            .unread = true;
+    }
 }
 
 pub fn send_message(

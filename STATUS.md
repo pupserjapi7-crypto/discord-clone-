@@ -269,6 +269,39 @@ Server-Release-Build waren vor den Änderungen **grün**.
   Windows, Bandbreiten-Engpässe (Chrome schaltet dann selbst Schichten ab),
   Kamera im nativen Client (nicht gebaut).
 
+### Ungelesen und Erwähnungen pro Server (0.8.0, 20.11.2026)
+- **Server-Leiste** (Web und nativ): Punkt in der Ecke, wenn ein sichtbarer
+  Kanal Neues hat; rote Zahl für ungelesene Erwähnungen (`@handle`), ab 100
+  „99+“. Der offene Server zeigt keinen Punkt (das macht die Kanalliste),
+  wohl aber Erwähnungen aus anderen Kanälen. Screenreader/Tooltip: „Name,
+  ungelesen“ bzw. „Name, 2 Erwähnungen“.
+- **Server:** Erwähnungen landen beim Speichern in `message_mentions` (nur
+  Mitglieder, nicht der Autor, max. 20 pro Nachricht; Gateway, REST,
+  Forum-Beiträge, Webhooks). `GET /users/@me/unread[?guild_id=]` rechnet die
+  Rechte aller Kanäle eines Servers in einem Durchgang (Overrides in einer
+  Abfrage, Threads erben vom Elternkanal) und zählt nur Kanäle mit Sehen +
+  Verlauf. Eigene REST-Nachrichten setzen jetzt den eigenen Lesestand mit
+  (wie schon das Gateway). Migration `0006_mention_index` (nur ein Index).
+- **Ereignis `guild_activity`** ohne Kanal-ID, nur an Sessions mit
+  Leserecht für den Kanal und nie an den Autor; pro Kanal höchstens eins pro
+  Sekunde (der Rest der Sekunde wird nachgereicht). Erwähnte bekommen sofort
+  einen eigenen Hinweis. Clients setzen den Punkt selbst und fragen nur bei
+  Erwähnungen (entprellt 1,5 s), beim Verbinden, beim Verlassen eines Servers
+  und bei Fensterfokus (höchstens alle 30 s) nach. Ein erster Entwurf schickte
+  den Hinweis an alle Sessions – das hätte verraten, wann in versteckten
+  Kanälen geschrieben wird; vor dem Commit korrigiert.
+- **Getestet:** Integrationstest `unread_summary_counts_only_visible_mentions`
+  (Hinweis nur bei sichtbarer Erwähnung, versteckter Kanal: kein Ereignis und
+  keine Zählung, Autor bekommt nichts, Serie → eins sofort plus eins
+  nachgereicht, fremder Server bleibt unsichtbar, Selbst-Erwähnung und eigene
+  Nachricht zählen nicht, Lesebestätigung leert); im Browser mit zwei Konten:
+  Punkt, keine Abfrage bei fünf Folgenachrichten, Zahl bei Erwähnung, Öffnen
+  leert, versteckter Kanal bleibt ohne Punkt; nativer Client unter Xvfb:
+  Punkt und Zahl. Migrationen 1–6 frisch und 5 → 6 als Update.
+- **Nicht gebaut:** Erwähnungs-Zahl pro Kanal in der Kanalliste, `@everyone`/
+  Rollen-Erwähnungen, Lesestand-Abgleich zwischen Geräten in Echtzeit (nur
+  beim Fokus).
+
 ### Desktop-Hülle und Web-Sicherheit (0.8.0, 20.11.2026)
 - **CSP für die Web-App** (auch in Tauri, das die Server-URL lädt): `nova
   serve` schickt für `index.html` `script-src 'self' 'wasm-unsafe-eval'`,
@@ -328,15 +361,14 @@ WASM 501 KB gzip.
 1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
    Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
    automatisierbar.
-2. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
-   Ungelesen-Daten für alle Server (die API liefert sie nur für den offenen).
-3. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
-4. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
-5. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
+2. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+3. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
+4. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
    Code-Signing, Tauri-Updater.
-6. Video: Kamera im nativen Client (Senden und Anzeigen), Schichtwahl im
+5. Video: Kamera im nativen Client (Senden und Anzeigen), Schichtwahl im
    nativen Client (empfängt immer „h“).
-7. Foren: Tags, Sortierung; Beiträge im nativen Client starten.
+6. Foren: Tags, Sortierung; Beiträge im nativen Client starten.
+7. Ungelesen: Erwähnungs-Zahl pro Kanal, Rollen-Erwähnungen.
 
 ---
 

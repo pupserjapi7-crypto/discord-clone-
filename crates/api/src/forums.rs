@@ -120,6 +120,10 @@ pub(crate) async fn create_post(
         return Err(ApiError::BadRequest("unknown attachment".into()));
     };
     state.metrics.messages_created.inc();
+    state
+        .db
+        .upsert_read_state(auth.user_id, post.thread.id, post.message_id)
+        .await?;
     let base = &state.cfg.public_origin;
     let message = MessageView {
         id: post.message_id,
@@ -143,6 +147,16 @@ pub(crate) async fn create_post(
             guild_id: forum.guild_id,
         },
     );
+    state
+        .gateway
+        .message_activity(
+            forum.guild_id,
+            post.thread.id,
+            post.message_id,
+            auth.user_id,
+            &message.content,
+        )
+        .await;
     Ok((
         StatusCode::CREATED,
         json_ids(&PostCreated {
@@ -328,5 +342,9 @@ pub(crate) async fn execute_webhook(
             message: view.clone(),
         },
     );
+    state
+        .gateway
+        .message_activity(hook.guild_id, hook.channel_id, id, user.id, &view.content)
+        .await;
     Ok((StatusCode::CREATED, json_ids(&view)))
 }

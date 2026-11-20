@@ -247,6 +247,11 @@ pub(crate) async fn create_message(
         }
     };
     state.metrics.messages_created.inc();
+    // Eigene Nachrichten machen den Kanal nicht ungelesen (wie im Gateway).
+    state
+        .db
+        .upsert_read_state(auth.user_id, channel_id, id)
+        .await?;
     let base = &state.cfg.public_origin;
     let view = MessageView {
         id,
@@ -269,6 +274,16 @@ pub(crate) async fn create_message(
             message: view.clone(),
         },
     );
+    state
+        .gateway
+        .message_activity(
+            channel.guild_id,
+            channel_id,
+            id,
+            auth.user_id,
+            &view.content,
+        )
+        .await;
     Ok((StatusCode::CREATED, json_ids(&view)))
 }
 

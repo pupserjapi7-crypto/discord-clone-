@@ -111,6 +111,8 @@ async fn spawn_server_with_state(database_url: &str) -> (String, AppState) {
         blob_gc: Arc::new(tokio::sync::RwLock::new(())),
         media_limit: Arc::new(Semaphore::new(2)),
     };
+    // Wie `nova serve`: Aufräumer und nachgereichte `guild_activity`.
+    gateway.spawn_janitor();
     let app = nova_api::router(state.clone()).merge(gateway.router());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -809,6 +811,50 @@ async fn next_frame(
     }
 }
 
+/// Nächstes Event außer `guild_activity` (das kommt nach jeder
+/// Guild-Nachricht zusätzlich).
+async fn next_event(
+    stream: &mut (
+             impl StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin
+         ),
+) -> Event {
+    loop {
+        let event: Event = protocol::decode_body(&next_frame(stream, protocol::OP_DISPATCH).await)
+            .expect("dispatch");
+        if !matches!(event, Event::GuildActivity { .. }) {
+            return event;
+        }
+    }
+}
+
+/// Per WebSocket anmelden; liefert die Hälften des Sockets.
+async fn connect_gateway(
+    base: &str,
+    token: &str,
+) -> (
+    impl SinkExt<WsMessage, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    impl StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin,
+) {
+    let ws_url = format!("{}/gateway", base.replacen("http", "ws", 1));
+    let (socket, _) = tokio_tungstenite::connect_async(ws_url)
+        .await
+        .expect("connect");
+    let (mut sink, mut stream) = socket.split();
+    let hello = ClientOp::Hello {
+        token: token.to_owned(),
+        resume: None,
+    };
+    sink.send(WsMessage::Binary(
+        protocol::encode(protocol::OP_HELLO, 0, &hello).expect("encode"),
+    ))
+    .await
+    .expect("hello");
+    let ok: ServerOp =
+        protocol::decode_body(&next_frame(&mut stream, protocol::OP_HELLO_OK).await).expect("ok");
+    assert!(matches!(ok, ServerOp::HelloOk { .. }));
+    (sink, stream)
+}
+
 #[tokio::test]
 async fn gateway_roundtrip_ack_dispatch_and_rest_fanout() {
     let url = db_or_skip!();
@@ -867,9 +913,7 @@ async fn gateway_roundtrip_ack_dispatch_and_rest_fanout() {
         panic!("kein Ack: {ack:?}");
     };
     assert_eq!(nonce, 42);
-    let event: Event = protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
-        .expect("dispatch");
-    match event {
+    match next_event(&mut stream).await {
         Event::MessageCreate { message } => {
             assert_eq!(Some(message.id), id);
             assert_eq!(message.content, "über das Gateway");
@@ -885,8 +929,7 @@ async fn gateway_roundtrip_ack_dispatch_and_rest_fanout() {
         )
         .await;
     assert_eq!(status, 201);
-    let event: Event = protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
-        .expect("dispatch");
+    let event = next_event(&mut stream).await;
     assert!(matches!(event, Event::MessageCreate { message } if message.content == "per REST"));
 }
 
@@ -1310,9 +1353,7 @@ async fn uploads_reach_gateway_dms_and_get_cleaned_up() {
     .await
     .expect("send");
     next_frame(&mut stream, protocol::OP_ACK).await;
-    let event: Event = protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
-        .expect("dispatch");
-    match event {
+    match next_event(&mut stream).await {
         Event::MessageCreate { message } => {
             assert_eq!(message.attachments.len(), 1);
             assert_eq!(message.attachments[0].id, file_id);
@@ -1610,4 +1651,208 @@ async fn forums_webhooks_and_channel_overrides() {
         .await
         .unwrap();
     assert_eq!(gone.status().as_u16(), 404);
+}
+
+/// Liest eine Weile mit und scheitert, falls `guild_activity` ankommt.
+async fn assert_no_activity(
+    stream: &mut (
+             impl StreamExt<Item = Result<WsMessage, tokio_tungstenite::tungstenite::Error>> + Unpin
+         ),
+    wait: Duration,
+) {
+    let deadline = Instant::now() + wait;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        match tokio::time::timeout(remaining, stream.next()).await {
+            Err(_) => return,
+            Ok(Some(Ok(WsMessage::Binary(bytes)))) => {
+                let frame = protocol::decode(&bytes).expect("frame");
+                if frame.op == protocol::OP_DISPATCH {
+                    let event: Event = protocol::decode_body(frame.body).expect("dispatch");
+                    assert!(
+                        !matches!(event, Event::GuildActivity { .. }),
+                        "unerwartet: {event:?}"
+                    );
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(other) => panic!("Socket: {other:?}"),
+        }
+    }
+}
+
+/// Ungelesen-Stand eines Servers aus `GET /users/@me/unread`.
+fn guild_unread(list: &Value, guild_id: &str) -> (bool, i64) {
+    let entry = list
+        .as_array()
+        .expect("Liste")
+        .iter()
+        .find(|entry| entry["guild_id"] == guild_id)
+        .unwrap_or_else(|| panic!("Server {guild_id} fehlt: {list}"));
+    (
+        entry["unread"].as_bool().expect("unread"),
+        entry["mentions"].as_i64().expect("mentions"),
+    )
+}
+
+#[tokio::test]
+async fn unread_summary_counts_only_visible_mentions() {
+    let url = db_or_skip!();
+    let base = spawn_server(&url).await;
+    let owner = Client::register(&base, "uro").await;
+    let member = Client::register(&base, "urm").await;
+    let (guild_id, general) = owner.guild().await;
+    owner.invite_and_join(&member, &guild_id).await;
+    let guild: i64 = guild_id.parse().expect("guild id");
+    let (_, me) = member.get("/api/v1/users/@me").await;
+    let handle = me["handle"].as_str().expect("handle").to_owned();
+    let (_, owner_me) = owner.get("/api/v1/users/@me").await;
+    let owner_handle = owner_me["handle"].as_str().expect("handle").to_owned();
+
+    // Ein Kanal, den das Mitglied nicht sehen darf.
+    let (status, secret) = owner
+        .post(
+            &format!("/api/v1/guilds/{guild_id}/channels"),
+            json!({ "name": "geheim" }),
+        )
+        .await;
+    assert_eq!(status, 201, "{secret}");
+    let secret_id = secret["id"].as_str().expect("id").to_owned();
+    let (status, _) = owner
+        .put(
+            &format!(
+                "/api/v1/channels/{secret_id}/overrides/member/{}",
+                member.id
+            ),
+            json!({ "allow": 0, "deny": 1u64 << 7 }),
+        )
+        .await;
+    assert_eq!(status, 204);
+
+    let (status, list) = member.get("/api/v1/users/@me/unread").await;
+    assert_eq!(status, 200, "{list}");
+    assert_eq!(
+        guild_unread(&list, &guild_id),
+        (false, 0),
+        "frisch beigetreten"
+    );
+
+    let (_owner_sink, mut owner_stream) = connect_gateway(&base, &owner.token).await;
+    let (_sink, mut stream) = connect_gateway(&base, &member.token).await;
+
+    // Erwähnung im sichtbaren Kanal: gezielter Hinweis plus allgemeines Ereignis.
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{general}/messages"),
+            json!({ "content": format!("Hallo @{handle}, schau mal") }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let event: Event =
+            protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
+                .expect("dispatch");
+        match event {
+            Event::GuildActivity {
+                guild_id,
+                mentioned,
+            } => {
+                assert_eq!(guild_id, guild);
+                seen.push(mentioned);
+            }
+            other => panic!("unerwartetes Event: {other:?}"),
+        }
+    }
+    seen.sort();
+    assert_eq!(seen, vec![false, true]);
+
+    // Versteckter Kanal: weder Hinweis noch Ereignis – auch nicht, wann dort
+    // geschrieben wird. Der Autor selbst bekommt nie eins.
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{secret_id}/messages"),
+            json!({ "content": format!("@{handle} darf das nicht lesen") }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    assert_no_activity(&mut stream, Duration::from_millis(1500)).await;
+    assert_no_activity(&mut owner_stream, Duration::from_millis(50)).await;
+
+    // Serie im sichtbaren Kanal: sofort eins, der Rest am Ende der Sekunde.
+    for text in ["eins", "zwei", "drei"] {
+        let (status, _) = owner
+            .post(
+                &format!("/api/v1/channels/{general}/messages"),
+                json!({ "content": text }),
+            )
+            .await;
+        assert_eq!(status, 201);
+    }
+    for _ in 0..2 {
+        let event: Event =
+            protocol::decode_body(&next_frame(&mut stream, protocol::OP_DISPATCH).await)
+                .expect("dispatch");
+        assert!(
+            matches!(
+                event,
+                Event::GuildActivity {
+                    mentioned: false,
+                    ..
+                }
+            ),
+            "{event:?}"
+        );
+    }
+    assert_no_activity(&mut stream, Duration::from_millis(1200)).await;
+    assert_no_activity(&mut owner_stream, Duration::from_millis(50)).await;
+
+    let (_, list) = member.get("/api/v1/users/@me/unread").await;
+    assert_eq!(guild_unread(&list, &guild_id), (true, 1));
+
+    // Nur ein Server auf Nachfrage; fremde Server bleiben unsichtbar.
+    let (_, only) = member
+        .get(&format!("/api/v1/users/@me/unread?guild_id={guild_id}"))
+        .await;
+    assert_eq!(only.as_array().map(Vec::len), Some(1), "{only}");
+    let (foreign, _) = owner.guild().await;
+    let (status, none) = member
+        .get(&format!("/api/v1/users/@me/unread?guild_id={foreign}"))
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(none, json!([]));
+
+    // Eigene Nachrichten und Selbst-Erwähnungen zählen nicht.
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{general}/messages"),
+            json!({ "content": format!("@{owner_handle} Notiz an mich") }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    let (_, list) = owner.get("/api/v1/users/@me/unread").await;
+    assert_eq!(guild_unread(&list, &guild_id), (false, 0));
+
+    // Gelesen: Punkt und Zahl verschwinden.
+    let (_, history) = member
+        .get(&format!("/api/v1/channels/{general}/messages"))
+        .await;
+    let last = history
+        .as_array()
+        .and_then(|list| list.last())
+        .and_then(|message| message["id"].as_str())
+        .expect("letzte Nachricht")
+        .to_owned();
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{general}/ack"),
+            json!({ "message_id": last }),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (_, list) = member.get("/api/v1/users/@me/unread").await;
+    assert_eq!(guild_unread(&list, &guild_id), (false, 0));
 }

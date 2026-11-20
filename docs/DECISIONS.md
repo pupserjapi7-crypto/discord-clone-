@@ -4,6 +4,28 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-20 — Ungelesen pro Server: gefilterter Hinweis statt Zähler im Gateway
+
+**Entscheidung:** Das Gateway zählt nichts mit. Nach einer neuen Nachricht
+geht `guild_activity { guild_id }` an die Sessions der Guild, die den Kanal
+sehen und lesen dürfen (Rechte aus dem 30-s-Cache, im Hintergrund geprüft),
+nie an den Autor; pro Kanal höchstens eins pro Sekunde, der Rest der Sekunde
+wird am Fensterende nachgereicht. Erwähnte mit Leserecht bekommen sofort
+`guild_activity { mentioned: true }`. Clients setzen bei einem normalen
+Hinweis den Punkt selbst; nur Erwähnungen, der Verbindungsaufbau, das
+Verlassen eines Servers und der Fensterfokus (höchstens alle 30 s) fragen
+`GET /users/@me/unread[?guild_id=]` (volle Rechteprüfung, Overrides aller
+Kanäle in einer Abfrage).
+
+**Warum:** Ein Hinweis an *alle* Sessions hätte verraten, wann in einem
+versteckten Kanal geschrieben wird. Gefiltert ist der Hinweis zugleich
+genau genug, um ohne REST-Abfrage den Punkt zu setzen: in einem lebhaften
+Server kostet eine Nachricht damit keine Datenbankabfrage pro Leser (gemessen:
+fünf Folgenachrichten → null Abfragen). Die Rechteprüfung trifft fast immer
+den Cache, den das Senden ohnehin füllt. Erwähnungen stehen in der seit 0.1
+vorhandenen Tabelle `message_mentions`; neu ist nur der Index für die Suche
+pro Person (Migration `0006`).
+
 ## 2026-11-20 — Foren als Threads, Webhooks mit eigenem Bot-Konto
 
 **Entscheidung:** Ein Forum ist ein Kanal `kind = 3` ohne eigene Nachrichten;

@@ -339,6 +339,12 @@ a.nv-btn, a.nv-iconbtn { text-decoration: none; }
 .nv-rail__btn:hover { background: var(--nv-bg-4); color: var(--nv-text-1); }
 .nv-rail__item.is-active .nv-rail__btn { background: var(--nv-bg-4); color: var(--nv-text-1); box-shadow: 0 0 0 2px var(--nv-accent-line); }
 .nv-rail__btn--add { background: transparent; color: var(--nv-text-2); border: 1px dashed var(--nv-line-strong); }
+/* Ungelesen: Punkt in der Ecke des Quadrats (kein Rand-Marker), Erwähnungen
+   als Zahl an derselben Stelle. Der Ring in der Leistenfarbe trennt beides
+   vom Symbol. */
+.nv-rail__dot, .nv-rail__count { position: absolute; pointer-events: none; box-shadow: 0 0 0 2px var(--nv-bg-0); }
+.nv-rail__dot { right: -3px; bottom: -3px; width: 10px; height: 10px; border-radius: var(--nv-r-pill); background: var(--nv-text-1); }
+.nv-rail__count { right: -6px; bottom: -5px; }
 .nv-rail__btn--add:hover { background: var(--nv-bg-3); }
 .nv-rail__spacer { flex: 1; }
 

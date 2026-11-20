@@ -44,6 +44,8 @@ pub const SPEAKING: Color = color!(0xffc34d);
 pub const ONLINE: Color = color!(0x4fd18b);
 /// `--nv-danger`
 pub const DANGER: Color = color!(0xff6b6b);
+/// `--nv-text-on-danger`: Text auf Rot
+pub const ON_DANGER: Color = color!(0x1b1405);
 /// `--nv-offline`
 pub const OFFLINE: Color = color!(0x5d6779);
 
@@ -330,6 +332,32 @@ pub fn unread_dot(_: &Theme) -> container::Style {
             ..Border::default()
         },
         ..fill(TEXT)
+    }
+}
+
+/// Ungelesen-Punkt in der Server-Leiste: 2-px-Ring in Leistenfarbe trennt ihn
+/// vom Server-Symbol (wie `.nv-rail__dot` im Web).
+pub fn rail_dot(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: RAIL,
+            width: 2.0,
+            radius: 999.0.into(),
+        },
+        ..fill(TEXT)
+    }
+}
+
+/// Erwähnungs-Zahl in der Server-Leiste (`.nv-count`, mit Ring).
+pub fn mention_badge(_: &Theme) -> container::Style {
+    container::Style {
+        border: Border {
+            color: RAIL,
+            width: 2.0,
+            radius: 999.0.into(),
+        },
+        text_color: Some(ON_DANGER),
+        ..fill(DANGER)
     }
 }
 
@@ -752,6 +780,7 @@ mod tests {
             ("--nv-text-2", MUTED),
             ("--nv-text-3", FAINT),
             ("--nv-text-on-accent", ON_ACCENT),
+            ("--nv-text-on-danger", ON_DANGER),
             ("--nv-accent", ACCENT),
             ("--nv-accent-hover", ACCENT_HOVER),
             ("--nv-accent-soft", ACTIVE),

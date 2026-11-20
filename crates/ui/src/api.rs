@@ -191,6 +191,21 @@ pub async fn delete_message(channel: &str, message: &str) -> Result<(), String> 
     .await
 }
 
+/// Ungelesen-Stand aller eigenen Server, oder nur eines.
+pub async fn unread(guild: Option<&str>) -> Result<Vec<GuildUnread>, String> {
+    match guild {
+        Some(id) => {
+            send(
+                "GET",
+                &format!("/api/v1/users/@me/unread?guild_id={id}"),
+                None,
+            )
+            .await
+        }
+        None => send("GET", "/api/v1/users/@me/unread", None).await,
+    }
+}
+
 pub async fn ack(channel: &str, message: &str) -> Result<(), String> {
     send_empty(
         "POST",
