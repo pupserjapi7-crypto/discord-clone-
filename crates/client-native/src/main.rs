@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod attach;
 mod capture;
 mod gateway;
 mod icon;
@@ -95,6 +96,7 @@ struct ChatMessage {
     edited: bool,
     pinned: bool,
     reactions: Vec<api::Reaction>,
+    attachments: Vec<api::Attachment>,
 }
 
 impl ChatMessage {
@@ -112,6 +114,7 @@ impl ChatMessage {
         built.edited = message.edited_at.is_some();
         built.pinned = message.pinned;
         built.reactions = message.reactions;
+        built.attachments = message.attachments;
         built
     }
 
@@ -134,6 +137,7 @@ impl ChatMessage {
                 me: r.me,
             })
             .collect();
+        built.attachments = message.attachments.into_iter().map(Into::into).collect();
         built
     }
 
@@ -174,6 +178,7 @@ impl ChatMessage {
             edited: false,
             pinned: false,
             reactions: Vec::new(),
+            attachments: Vec::new(),
         }
     }
 }
@@ -288,6 +293,11 @@ struct App {
     dm_error: Option<String>,
     dm_unread: HashSet<i64>,
 
+    /// Wartende Anhänge je Ziel (Kanal oder DM).
+    pending: HashMap<api::UploadTarget, Vec<attach::PendingFile>>,
+    /// Vorschaubilder je Anhang-ID.
+    previews: HashMap<i64, attach::Preview>,
+
     prefs: prefs::Prefs,
     devices: (Vec<String>, Vec<String>),
     ptt_held: bool,
@@ -369,6 +379,15 @@ enum Message {
     /// (DM-Kanal, Nonce des Platzhalters, Antwort)
     DmSent(i64, u64, Result<api::Message, String>),
 
+    PickFiles,
+    /// Gewählte Dateien und Meldungen zu übersprungenen.
+    FilesPicked(api::UploadTarget, Vec<attach::Picked>, Vec<String>),
+    Uploaded(api::UploadTarget, u64, Result<api::Attachment, String>),
+    RemovePending(api::UploadTarget, u64),
+    PreviewLoaded(i64, Result<attach::Decoded, String>),
+    SaveAttachment(api::Attachment),
+    Saved(Result<Option<String>, String>),
+
     AskConfirm(Option<ModAction>),
     Moderate(i64, ModAction),
     Timeout(i64, i64),
@@ -447,6 +466,8 @@ impl App {
             dm_busy: false,
             dm_error: None,
             dm_unread: HashSet::new(),
+            pending: HashMap::new(),
+            previews: HashMap::new(),
             prefs: prefs::Prefs::load(),
             devices: (Vec::new(), Vec::new()),
             ptt_held: false,
@@ -599,7 +620,10 @@ impl App {
         let (Some(dm), Some(me)) = (self.dm, self.me.clone()) else {
             return Task::none();
         };
-        if content.is_empty() {
+        let Some(attachments) = self.take_ready(api::UploadTarget::Dm(dm)) else {
+            return Task::none();
+        };
+        if content.is_empty() && attachments.is_empty() {
             return Task::none();
         }
         let nonce = self.next_nonce;
@@ -612,13 +636,86 @@ impl App {
             chrono::Utc::now(),
         );
         local.nonce = Some(nonce);
+        let ids: Vec<i64> = attachments.iter().map(|a| a.id).collect();
+        local.attachments = attachments;
         self.history.entry(dm).or_default().push(local);
         self.draft.clear();
         let api = self.api.clone();
         Task::perform(
-            async move { api.send_dm(dm, &content).await },
+            async move { api.send_dm(dm, &content, &ids).await },
             move |result| Message::DmSent(dm, nonce, result),
         )
+    }
+
+    /// Wohin ein Upload gerade ginge.
+    fn upload_target(&self) -> Option<api::UploadTarget> {
+        if self.home {
+            self.dm.map(api::UploadTarget::Dm)
+        } else {
+            self.channel.map(api::UploadTarget::Channel)
+        }
+    }
+
+    /// Fertige Uploads des Ziels für das Senden herausnehmen. `None`, solange
+    /// noch etwas hochlädt (dann bleibt alles liegen).
+    fn take_ready(&mut self, target: api::UploadTarget) -> Option<Vec<api::Attachment>> {
+        let busy = self.pending.get(&target).is_some_and(|list| {
+            list.iter()
+                .any(|file| matches!(file.state, attach::PendingState::Uploading))
+        });
+        if busy {
+            self.error = Some("Einen Moment – die Dateien werden noch hochgeladen.".into());
+            return None;
+        }
+        Some(
+            self.pending
+                .remove(&target)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|file| match file.state {
+                    attach::PendingState::Done(attachment) => Some(attachment),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
+
+    /// Fehlende Vorschaubilder der sichtbaren Nachrichten nachladen; alte
+    /// Vorschauen fallen weg, wenn der Speicher voll wird.
+    fn load_previews(&mut self) -> Task<Message> {
+        let wanted: Vec<i64> = self
+            .messages()
+            .iter()
+            .flat_map(|message| message.attachments.iter())
+            .chain(
+                self.upload_target()
+                    .and_then(|target| self.pending.get(&target))
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|file| match &file.state {
+                        attach::PendingState::Done(attachment) => Some(attachment),
+                        _ => None,
+                    }),
+            )
+            .filter(|attachment| attachment.is_image())
+            .map(|attachment| attachment.id)
+            .collect();
+        if self.previews.len() > 96 {
+            self.previews.retain(|id, _| wanted.contains(id));
+        }
+        let mut tasks = Vec::new();
+        for id in wanted {
+            if self.previews.contains_key(&id) {
+                continue;
+            }
+            self.previews.insert(id, attach::Preview::Loading);
+            let api = self.api.clone();
+            tasks.push(Task::perform(
+                attach::load_preview(api, id),
+                move |result| Message::PreviewLoaded(id, result),
+            ));
+        }
+        Task::batch(tasks)
     }
 
     fn current_channel(&self) -> Option<&Channel> {
@@ -647,6 +744,21 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // Nach Nachrichten, die den sichtbaren Verlauf ändern können, fehlende
+        // Vorschaubilder holen (billig: nur ein Blick über die Liste).
+        let previews = !matches!(
+            message,
+            Message::Tick | Message::VoiceTick | Message::Key(_) | Message::DraftChanged(_)
+        );
+        let task = self.update_inner(message);
+        if previews && self.screen == Screen::Chat {
+            Task::batch([task, self.load_previews()])
+        } else {
+            task
+        }
+    }
+
+    fn update_inner(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::ServerChanged(value) => self.server = value,
             Message::HandleChanged(value) => self.handle = value,
@@ -737,7 +849,12 @@ impl App {
                 }
                 if let Some(id) = target {
                     let open = self.update(Message::OpenChannel(id));
-                    return Task::batch([open, self.dev_modal(), self.dev_voice()]);
+                    return Task::batch([
+                        open,
+                        self.dev_modal(),
+                        self.dev_voice(),
+                        self.dev_attach(),
+                    ]);
                 }
                 self.channel = None;
             }
@@ -800,7 +917,12 @@ impl App {
                 let (Some(channel_id), Some(me)) = (self.channel, self.me.clone()) else {
                     return Task::none();
                 };
-                if content.is_empty() {
+                let target = api::UploadTarget::Channel(channel_id);
+                let has_files = self
+                    .pending
+                    .get(&target)
+                    .is_some_and(|list| !list.is_empty());
+                if content.is_empty() && !has_files {
                     return Task::none();
                 }
                 let Some(gateway) = self
@@ -811,6 +933,12 @@ impl App {
                     self.error = Some("Gateway ist nicht verbunden.".into());
                     return Task::none();
                 };
+                let Some(attachments) = self.take_ready(target) else {
+                    return Task::none();
+                };
+                if content.is_empty() && attachments.is_empty() {
+                    return Task::none();
+                }
                 let nonce = self.next_nonce;
                 self.next_nonce += 1;
                 let mut local = ChatMessage::build(
@@ -821,11 +949,14 @@ impl App {
                     chrono::Utc::now(),
                 );
                 local.nonce = Some(nonce);
+                let attachment_ids = attachments.iter().map(|a| a.id).collect();
+                local.attachments = attachments;
                 self.history.entry(channel_id).or_default().push(local);
                 let _ = gateway.unbounded_send(Command::Send {
                     nonce,
                     channel_id,
                     content,
+                    attachment_ids,
                 });
                 self.draft.clear();
                 self.last_typing_sent = None;
@@ -857,6 +988,8 @@ impl App {
                 self.unread.clear();
                 self.typing.clear();
                 self.history_complete.clear();
+                self.pending.clear();
+                self.previews.clear();
             }
 
             Message::CheckUpdate => {
@@ -1315,6 +1448,97 @@ impl App {
                 self.error = Some(err);
             }
 
+            // --- Anhänge -------------------------------------------------
+            Message::PickFiles => {
+                let Some(target) = self.upload_target() else {
+                    return Task::none();
+                };
+                return Task::perform(attach::pick_files(), move |(files, errors)| {
+                    Message::FilesPicked(target, files, errors)
+                });
+            }
+            Message::FilesPicked(target, files, errors) => {
+                if !errors.is_empty() {
+                    self.error = Some(errors.join(" "));
+                }
+                let mut tasks = Vec::new();
+                for file in files {
+                    let list = self.pending.entry(target).or_default();
+                    if list.len() >= attach::MAX_ATTACHMENTS {
+                        self.error = Some("Höchstens 10 Anhänge pro Nachricht.".into());
+                        break;
+                    }
+                    let key = self.next_nonce;
+                    self.next_nonce += 1;
+                    list.push(attach::PendingFile {
+                        key,
+                        name: file.name.clone(),
+                        size: file.bytes.len() as i64,
+                        state: attach::PendingState::Uploading,
+                    });
+                    let api = self.api.clone();
+                    tasks.push(Task::perform(
+                        async move { api.upload(target, &file.name, file.bytes).await },
+                        move |result| Message::Uploaded(target, key, result),
+                    ));
+                }
+                return Task::batch(tasks);
+            }
+            Message::Uploaded(target, key, result) => {
+                let item = self
+                    .pending
+                    .get_mut(&target)
+                    .and_then(|list| list.iter_mut().find(|file| file.key == key));
+                match (item, result) {
+                    (Some(item), Ok(attachment)) => {
+                        item.state = attach::PendingState::Done(attachment);
+                    }
+                    (Some(item), Err(err)) => {
+                        self.error = Some(format!("{}: {err}", item.name));
+                        item.state = attach::PendingState::Failed(err);
+                    }
+                    // Inzwischen entfernt: gleich wieder verwerfen.
+                    (None, Ok(attachment)) => {
+                        let api = self.api.clone();
+                        return Task::perform(
+                            async move { api.discard_attachment(attachment.id).await },
+                            |_| Message::Ignore,
+                        );
+                    }
+                    (None, Err(_)) => {}
+                }
+            }
+            Message::RemovePending(target, key) => {
+                let removed = self.pending.get_mut(&target).and_then(|list| {
+                    let pos = list.iter().position(|file| file.key == key)?;
+                    Some(list.remove(pos))
+                });
+                if let Some(attach::PendingFile {
+                    state: attach::PendingState::Done(attachment),
+                    ..
+                }) = removed
+                {
+                    let api = self.api.clone();
+                    return Task::perform(
+                        async move { api.discard_attachment(attachment.id).await },
+                        |_| Message::Ignore,
+                    );
+                }
+            }
+            Message::PreviewLoaded(id, result) => {
+                let preview = match result {
+                    Ok(decoded) => attach::Preview::Ready(decoded.handle()),
+                    Err(_) => attach::Preview::Failed,
+                };
+                self.previews.insert(id, preview);
+            }
+            Message::SaveAttachment(attachment) => {
+                let api = self.api.clone();
+                return Task::perform(attach::save(api, attachment), Message::Saved);
+            }
+            Message::Saved(Ok(_)) => {}
+            Message::Saved(Err(err)) => self.error = Some(err),
+
             // --- Moderation ----------------------------------------------
             Message::AskConfirm(action) => self.confirm = action,
             Message::Moderate(user, action) => {
@@ -1481,6 +1705,32 @@ impl App {
         Task::perform(tokio::time::sleep(Duration::from_millis(600)), move |()| {
             Message::OpenModal(modal.clone())
         })
+    }
+
+    /// Nur Debug-Builds: `NOVA_DEV_ATTACH=<datei>[,<datei>…]` hängt die Dateien
+    /// nach dem Laden an (Dateidialoge lassen sich nicht fernsteuern).
+    fn dev_attach(&self) -> Task<Message> {
+        if !cfg!(debug_assertions) {
+            return Task::none();
+        }
+        let (Ok(paths), Some(channel)) = (std::env::var("NOVA_DEV_ATTACH"), self.channel) else {
+            return Task::none();
+        };
+        let files: Vec<attach::Picked> = paths
+            .split(',')
+            .filter_map(|path| {
+                let path = std::path::Path::new(path.trim());
+                Some(attach::Picked {
+                    name: path.file_name()?.to_string_lossy().into_owned(),
+                    bytes: std::fs::read(path).ok()?,
+                })
+            })
+            .collect();
+        Task::done(Message::FilesPicked(
+            api::UploadTarget::Channel(channel),
+            files,
+            Vec::new(),
+        ))
     }
 
     /// Nur Debug-Builds: `NOVA_DEV_VOICE=1` öffnet den ersten Sprachkanal und
@@ -3750,37 +4000,70 @@ impl App {
 
     /// Eingabezeile; `ready` = Senden ist gerade möglich.
     fn view_composer(&self, placeholder: String, ready: bool) -> Element<'_, Message> {
-        let can_send = ready && !self.draft.trim().is_empty();
+        let target = self.upload_target();
+        let pending: &[attach::PendingFile] = target
+            .and_then(|target| self.pending.get(&target))
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let has_files = pending
+            .iter()
+            .any(|file| matches!(file.state, attach::PendingState::Done(_)));
+        let can_send = ready && (!self.draft.trim().is_empty() || has_files);
+        let can_attach = ready && target.is_some() && (self.home || self.can(perm::ATTACH_FILES));
+        let attach_button = tip(
+            button(icon(
+                Icon::Plus,
+                18.0,
+                if can_attach {
+                    style::MUTED
+                } else {
+                    style::FAINT
+                },
+            ))
+            .padding(8)
+            .on_press_maybe(can_attach.then_some(Message::PickFiles))
+            .style(|theme, status| style::icon_button(theme, status, false)),
+            "Datei anhängen",
+            tooltip::Position::Top,
+        );
+        let mut stacked = column![].spacing(8);
+        if let Some(target) = target.filter(|_| !pending.is_empty()) {
+            let chips = pending.iter().map(|file| self.view_pending(target, file));
+            stacked = stacked.push(row(chips).spacing(8).wrap());
+        }
         container(
-            container(
-                row![
-                    text_input(&placeholder, &self.draft)
-                        .on_input(Message::DraftChanged)
-                        .on_submit(Message::Send)
-                        .padding([10, 10])
-                        .style(style::bare_input),
-                    tip(
-                        button(icon(
-                            Icon::Send,
-                            18.0,
-                            if can_send {
-                                style::ON_ACCENT
-                            } else {
-                                style::FAINT
-                            }
-                        ))
-                        .padding(8)
-                        .on_press_maybe(can_send.then_some(Message::Send))
-                        .style(style::send_button),
-                        "Senden (Enter)",
-                        tooltip::Position::Top,
-                    ),
-                ]
-                .spacing(4)
-                .align_y(iced::Center),
-            )
-            .padding([4, 6])
-            .style(style::composer),
+            stacked.push(
+                container(
+                    row![
+                        attach_button,
+                        text_input(&placeholder, &self.draft)
+                            .on_input(Message::DraftChanged)
+                            .on_submit(Message::Send)
+                            .padding([10, 10])
+                            .style(style::bare_input),
+                        tip(
+                            button(icon(
+                                Icon::Send,
+                                18.0,
+                                if can_send {
+                                    style::ON_ACCENT
+                                } else {
+                                    style::FAINT
+                                }
+                            ))
+                            .padding(8)
+                            .on_press_maybe(can_send.then_some(Message::Send))
+                            .style(style::send_button),
+                            "Senden (Enter)",
+                            tooltip::Position::Top,
+                        ),
+                    ]
+                    .spacing(4)
+                    .align_y(iced::Center),
+                )
+                .padding([4, 6])
+                .style(style::composer),
+            ),
         )
         .padding(iced::Padding {
             top: 4.0,
@@ -3788,6 +4071,143 @@ impl App {
             bottom: 16.0,
             left: 16.0,
         })
+        .into()
+    }
+
+    /// Wartender Anhang über der Eingabezeile.
+    fn view_pending<'a>(
+        &'a self,
+        target: api::UploadTarget,
+        file: &'a attach::PendingFile,
+    ) -> Element<'a, Message> {
+        let failed = matches!(file.state, attach::PendingState::Failed(_));
+        let (status, color) = match &file.state {
+            attach::PendingState::Uploading => ("lädt hoch …".to_owned(), style::FAINT),
+            attach::PendingState::Done(_) => (attach::size_label(file.size), style::FAINT),
+            attach::PendingState::Failed(err) => (err.clone(), style::DANGER),
+        };
+        let preview = match &file.state {
+            attach::PendingState::Done(attachment) => match self.previews.get(&attachment.id) {
+                Some(attach::Preview::Ready(handle)) => Some(handle.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let thumb: Element<'a, Message> = match preview {
+            // `Contain` statt `Cover`: tiny-skia schneidet Bilder nicht ab.
+            Some(handle) => iced::widget::image(handle)
+                .width(40)
+                .height(40)
+                .content_fit(iced::ContentFit::Contain)
+                .border_radius(4)
+                .into(),
+            None => icon(
+                Icon::File,
+                20.0,
+                if failed { style::DANGER } else { style::MUTED },
+            ),
+        };
+        container(
+            row![
+                container(thumb)
+                    .width(40)
+                    .height(40)
+                    .center_x(40)
+                    .center_y(40)
+                    .style(style::image_placeholder),
+                column![
+                    text(short_name(&file.name, 24))
+                        .size(13)
+                        .font(style::BOLD)
+                        .color(style::TEXT),
+                    text(short_name(&status, 28)).size(12).color(color),
+                ]
+                .spacing(2)
+                .width(Fill),
+                tip(
+                    button(icon_hover(Icon::Close, 14.0, style::MUTED, style::TEXT))
+                        .padding(6)
+                        .on_press(Message::RemovePending(target, file.key))
+                        .style(|theme, status| style::icon_button(theme, status, false)),
+                    "Entfernen",
+                    tooltip::Position::Top,
+                ),
+            ]
+            .spacing(8)
+            .align_y(iced::Center),
+        )
+        .padding(8)
+        .width(232)
+        .style(if failed {
+            style::attachment_failed
+        } else {
+            style::attachment
+        })
+        .into()
+    }
+
+    /// Anhang unter einer Nachricht: Bild (Klick speichert) oder Datei-Zeile.
+    fn view_attachment<'a>(&'a self, attachment: &'a api::Attachment) -> Element<'a, Message> {
+        if attachment.is_image() {
+            let (width, height) = attach::display_size(attachment);
+            match self.previews.get(&attachment.id) {
+                Some(attach::Preview::Ready(handle)) => {
+                    return tip(
+                        button(
+                            iced::widget::image(handle.clone())
+                                .width(width)
+                                .height(height)
+                                .content_fit(iced::ContentFit::Contain)
+                                .border_radius(8),
+                        )
+                        .padding(0)
+                        .on_press(Message::SaveAttachment(attachment.clone()))
+                        .style(style::image_button),
+                        format!("{} speichern", attachment.filename),
+                        tooltip::Position::Top,
+                    );
+                }
+                Some(attach::Preview::Failed) => {}
+                _ => {
+                    return container(text("Bild lädt …").size(12).color(style::FAINT))
+                        .width(width)
+                        .height(height)
+                        .center_x(width)
+                        .center_y(height)
+                        .style(style::image_placeholder)
+                        .into();
+                }
+            }
+        }
+        container(
+            row![
+                icon(Icon::File, 20.0, style::MUTED),
+                column![
+                    text(short_name(&attachment.filename, 48))
+                        .size(14)
+                        .font(style::BOLD)
+                        .color(style::ACCENT),
+                    text(attach::size_label(attachment.size))
+                        .size(12)
+                        .color(style::FAINT),
+                ]
+                .spacing(2)
+                .width(Fill),
+                tip(
+                    button(icon_hover(Icon::Download, 18.0, style::MUTED, style::TEXT))
+                        .padding(6)
+                        .on_press(Message::SaveAttachment(attachment.clone()))
+                        .style(|theme, status| style::icon_button(theme, status, false)),
+                    "Speichern",
+                    tooltip::Position::Top,
+                ),
+            ]
+            .spacing(12)
+            .align_y(iced::Center),
+        )
+        .padding([8, 12])
+        .max_width(420)
+        .style(style::attachment)
         .into()
     }
 
@@ -3838,18 +4258,23 @@ impl App {
             } else {
                 style::TEXT
             };
-            let mut line = row![
-                text(&message.content)
-                    .size(15)
-                    .line_height(1.5)
-                    .color(color)
-            ]
-            .spacing(6)
-            .align_y(iced::Center);
-            if message.edited {
-                line = line.push(text("(bearbeitet)").size(11).color(style::FAINT));
+            if !message.content.is_empty() || message.edited {
+                let mut line = row![
+                    text(&message.content)
+                        .size(15)
+                        .line_height(1.5)
+                        .color(color)
+                ]
+                .spacing(6)
+                .align_y(iced::Center);
+                if message.edited {
+                    line = line.push(text("(bearbeitet)").size(11).color(style::FAINT));
+                }
+                body = body.push(line.wrap());
             }
-            body = body.push(line.wrap());
+            for attachment in &message.attachments {
+                body = body.push(self.view_attachment(attachment));
+            }
         }
 
         if let Some(id) = message.id.filter(|_| !message.reactions.is_empty()) {
@@ -4276,6 +4701,15 @@ fn live_tag<'a>(live: bool) -> Element<'a, Message> {
     .padding([1, 4])
     .style(|_: &Theme| style::tag(style::ACCENT))
     .into()
+}
+
+/// Lange Namen kürzen, damit Chips und Zeilen nicht umbrechen.
+fn short_name(name: &str, max: usize) -> String {
+    if name.chars().count() <= max {
+        return name.to_owned();
+    }
+    let head: String = name.chars().take(max.saturating_sub(1)).collect();
+    format!("{head}…")
 }
 
 fn initials(name: &str) -> String {

@@ -7,8 +7,8 @@ use nova_common::permissions::Permissions;
 use crate::{
     Db,
     models::{
-        Attachment, AuditRow, BanRow, BotRow, CHANNEL_THREAD, Channel, Guild, InviteRow, MemberRow,
-        MessageRow, OverrideRow, ReactionRow, Role, SessionRow, UnreadRow, User,
+        AuditRow, BanRow, BotRow, CHANNEL_THREAD, Channel, Guild, InviteRow, MemberRow, MessageRow,
+        OverrideRow, ReactionRow, Role, SessionRow, UnreadRow, User,
     },
 };
 
@@ -1097,95 +1097,6 @@ impl Db {
         .execute(&self.pool)
         .await
         .map(|_| ())
-    }
-
-    // ----------------------------------------------------------- attachments
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create_attachment(
-        &self,
-        id: i64,
-        channel_id: Option<i64>,
-        uploader_id: i64,
-        filename: &str,
-        content_type: &str,
-        size: i64,
-        sha256: &[u8],
-        width: Option<i32>,
-        height: Option<i32>,
-    ) -> Result<Attachment, sqlx::Error> {
-        sqlx::query_as!(
-            Attachment,
-            r#"insert into attachments
-                 (id, channel_id, uploader_id, filename, content_type, size, sha256, width, height)
-               values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-               returning id, channel_id, message_id, uploader_id, filename, content_type, size,
-                         sha256, width, height"#,
-            id,
-            channel_id,
-            uploader_id,
-            filename,
-            content_type,
-            size,
-            sha256,
-            width,
-            height
-        )
-        .fetch_one(&self.pool)
-        .await
-    }
-
-    pub async fn attachment(&self, id: i64) -> Result<Option<Attachment>, sqlx::Error> {
-        sqlx::query_as!(
-            Attachment,
-            r#"select id, channel_id, message_id, uploader_id, filename, content_type, size,
-                      sha256, width, height
-               from attachments where id = $1"#,
-            id
-        )
-        .fetch_optional(&self.pool)
-        .await
-    }
-
-    pub async fn attachments_for(
-        &self,
-        message_ids: &[i64],
-    ) -> Result<Vec<Attachment>, sqlx::Error> {
-        if message_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        sqlx::query_as!(
-            Attachment,
-            r#"select id, channel_id, message_id, uploader_id, filename, content_type, size,
-                      sha256, width, height
-               from attachments where message_id = any($1) order by id"#,
-            message_ids
-        )
-        .fetch_all(&self.pool)
-        .await
-    }
-
-    pub async fn attach_to_message(
-        &self,
-        message_id: i64,
-        attachment_ids: &[i64],
-        uploader_id: i64,
-        channel_id: i64,
-    ) -> Result<u64, sqlx::Error> {
-        if attachment_ids.is_empty() {
-            return Ok(0);
-        }
-        let result = sqlx::query!(
-            r#"update attachments set message_id = $1
-               where id = any($2) and uploader_id = $3 and channel_id = $4 and message_id is null"#,
-            message_id,
-            attachment_ids,
-            uploader_id,
-            channel_id
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected())
     }
 
     pub async fn upsert_read_state(

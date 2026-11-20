@@ -3,7 +3,8 @@
 //! - `GET  /users/@me/dms` – eigene DM-Kanäle, zuletzt aktive zuerst
 //! - `POST /users/@me/dms` `{ "handle": "…" }` – Kanal mit einer Person öffnen
 //! - `GET  /dms/{id}/messages?before=&limit=` – Verlauf
-//! - `POST /dms/{id}/messages` `{ "content": "…" }` – senden
+//! - `POST /dms/{id}/messages` `{ "content": "…", "attachment_ids": [] }` – senden
+//! - `POST /dms/{id}/attachments?filename=` – Anhang hochladen (siehe `uploads`)
 //!
 //! Nur Beteiligte sehen einen Kanal; für alle anderen gibt es 404. Bots
 //! können keine DMs öffnen oder senden (Spam-Schutz).
@@ -14,10 +15,10 @@ use axum::{
     http::StatusCode,
 };
 use nova_common::{
-    protocol::{DmChannelView, Event, MessageView, UserPublic},
+    protocol::{AttachmentView, DmChannelView, Event, MessageView, UserPublic, id_compat},
     validate,
 };
-use nova_db::views;
+use nova_db::{attachments::InsertOutcome, views};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -44,7 +45,11 @@ pub(crate) struct DmMessageQuery {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateDmMessage {
+    #[serde(default)]
     content: String,
+    /// Ab v0.8: vorher über `POST /dms/{id}/attachments` hochgeladen.
+    #[serde(default, deserialize_with = "id_compat::deserialize_vec")]
+    attachment_ids: Vec<i64>,
 }
 
 fn no_bots(auth: &Auth) -> ApiResult<()> {
@@ -144,6 +149,7 @@ fn dm_view(
     author: UserPublic,
     content: String,
     created_at: chrono::DateTime<chrono::Utc>,
+    attachments: Vec<AttachmentView>,
 ) -> MessageView {
     MessageView {
         id,
@@ -154,7 +160,7 @@ fn dm_view(
         edited_at: None,
         reply_to: None,
         reactions: Vec::new(),
-        attachments: Vec::new(),
+        attachments,
         pinned: false,
     }
 }
@@ -171,6 +177,9 @@ pub(crate) async fn list_dm_messages(
     let mut rows = state.db.dm_messages(dm_id, query.before, limit).await?;
     // Neueste zuerst geholt, angezeigt wird von alt nach neu.
     rows.reverse();
+    let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+    let attachments = state.db.dm_attachments_for(&ids).await?;
+    let base = &state.cfg.public_origin;
     let views: Vec<MessageView> = rows
         .into_iter()
         .map(|row| {
@@ -179,7 +188,12 @@ pub(crate) async fn list_dm_messages(
             } else {
                 peer.clone()
             };
-            dm_view(row.id, row.dm_id, author, row.content, row.created_at)
+            let own = attachments
+                .iter()
+                .filter(|attachment| attachment.dm_message_id == Some(row.id))
+                .map(|attachment| views::attachment_view(base, attachment))
+                .collect();
+            dm_view(row.id, row.dm_id, author, row.content, row.created_at, own)
         })
         .collect();
     Ok(json_ids(&views))
@@ -193,8 +207,12 @@ pub(crate) async fn create_dm_message(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     no_bots(&auth)?;
     let (me, peer) = participants(&state, dm_id, auth.user_id).await?;
-    validate::validate_message_content(&body.content, state.cfg.max_message_len)
-        .map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
+    validate::validate_message_body(
+        &body.content,
+        state.cfg.max_message_len,
+        body.attachment_ids.len(),
+    )
+    .map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
     if !state.auth_limiter.allow(
         format!("msg:{}", auth.user_id),
         state.cfg.msg_burst,
@@ -203,12 +221,40 @@ pub(crate) async fn create_dm_message(
         return Err(ApiError::RateLimited);
     }
     let id = state.ids.next_id();
-    let created_at = state
-        .db
-        .insert_dm_message(id, dm_id, auth.user_id, &body.content)
-        .await?;
+    let (created_at, attachments) = if body.attachment_ids.is_empty() {
+        let created_at = state
+            .db
+            .insert_dm_message(id, dm_id, auth.user_id, &body.content)
+            .await?;
+        (created_at, Vec::new())
+    } else {
+        match state
+            .db
+            .insert_dm_message_with_attachments(
+                id,
+                dm_id,
+                auth.user_id,
+                &body.content,
+                &body.attachment_ids,
+            )
+            .await?
+        {
+            InsertOutcome::Stored {
+                created_at,
+                attachments,
+            } => (created_at, attachments),
+            InsertOutcome::InvalidAttachments => {
+                return Err(ApiError::BadRequest("unknown attachment".into()));
+            }
+        }
+    };
     state.metrics.messages_created.inc();
-    let view = dm_view(id, dm_id, me, body.content, created_at);
+    let base = &state.cfg.public_origin;
+    let attachments = attachments
+        .iter()
+        .map(|attachment| views::attachment_view(base, attachment))
+        .collect();
+    let view = dm_view(id, dm_id, me, body.content, created_at, attachments);
     let event = Event::DmMessageCreate {
         message: view.clone(),
     };

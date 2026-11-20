@@ -51,13 +51,47 @@ bei Menschen: Rollen, Kanal-Overrides, Timeouts.
 | `GET` | `/api/v1/guilds` | – |
 | `GET` | `/api/v1/guilds/{id}` | Mitglied |
 | `GET` | `/api/v1/channels/{id}/messages?before=&limit=` | `READ_MESSAGE_HISTORY` |
-| `POST` | `/api/v1/channels/{id}/messages` `{content, reply_to?}` | `SEND_MESSAGES` |
+| `POST` | `/api/v1/channels/{id}/messages` `{content, reply_to?, attachment_ids?}` | `SEND_MESSAGES` (+ `ATTACH_FILES` mit Anhängen) |
+| `POST` | `/api/v1/channels/{id}/attachments?filename=` (roher Body) | `SEND_MESSAGES` + `ATTACH_FILES` |
+| `GET` | `/api/v1/attachments/{id}` (`?download=1`, `Range`) | Kanal sichtbar + `READ_MESSAGE_HISTORY` |
+| `DELETE` | `/api/v1/attachments/{id}` | eigener, noch nicht gesendeter Upload |
 | `DELETE` | `/api/v1/channels/{id}/messages/{msg}` | eigene oder `MANAGE_MESSAGES` |
 | `PUT`/`DELETE` | `/api/v1/channels/{id}/pins/{msg}` | `MANAGE_MESSAGES` |
 | `POST` | `/api/v1/channels/{id}/messages/{msg}/threads` `{name}` | `CREATE_THREADS` |
 | `POST` | `/api/v1/guilds/{id}/members/{user}/kick` | `KICK_MEMBERS` + Hierarchie |
 | `PUT` | `/api/v1/guilds/{id}/members/{user}/timeout` `{seconds}` | `TIMEOUT_MEMBERS` + Hierarchie |
 | `PUT`/`DELETE` | `/api/v1/guilds/{id}/bans/{user}` | `BAN_MEMBERS` + Hierarchie |
+
+### Anhänge (ab 0.8)
+
+Zwei Schritte: erst hochladen, dann mit der Nachricht senden.
+
+```bash
+# 1. Datei als rohen Body hochladen (kein Multipart). Antwort: AttachmentView.
+curl -X POST "https://<server>/api/v1/channels/<kanal>/attachments?filename=bericht.pdf" \
+  -H "Authorization: Bot nb_…" --data-binary @bericht.pdf
+# → {"id":"…","filename":"bericht.pdf","content_type":"application/pdf","size":88400,
+#    "width":null,"height":null,"url":"https://<server>/api/v1/attachments/…"}
+
+# 2. Nachricht mit Anhang senden; `content` darf dann leer sein.
+curl -X POST "https://<server>/api/v1/channels/<kanal>/messages" \
+  -H "Authorization: Bot nb_…" -H "Content-Type: application/json" \
+  -d '{"content":"Wochenbericht","attachment_ids":["…"]}'
+```
+
+- Den Typ bestimmt der Server aus den ersten Bytes, nie aus `Content-Type`.
+  Inline (mit `width`/`height`) erscheinen nur JPEG, PNG, GIF und WebP; alles
+  andere – auch SVG – wird als Download (`Content-Disposition: attachment`)
+  ausgeliefert.
+- Bilder verlieren EXIF/GPS, XMP, IPTC und Textblöcke; die Drehung bleibt.
+- Limits: `NOVA_MAX_UPLOAD_BYTES` (Standard 25 MB, sonst `413 too_large`),
+  `NOVA_GUILD_UPLOAD_QUOTA_BYTES` pro Server (2 GB, sonst `413
+  quota_exceeded`), `NOVA_UPLOADS_PER_MINUTE` pro Konto (20, sonst `429`).
+- Höchstens 10 Anhänge pro Nachricht; jeder Upload gehört genau einer
+  Nachricht im selben Kanal. Nicht gesendete Uploads löscht der Server nach
+  24 Stunden.
+- Im Gateway trägt `message_create` dieselben IDs in `attachment_ids`
+  (Zahlen oder Strings).
 
 ## 4. Rate-Limits
 

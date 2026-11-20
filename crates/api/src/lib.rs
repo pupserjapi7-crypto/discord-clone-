@@ -1,12 +1,15 @@
 //! HTTP API: auth, users, guilds, channels, message history, health.
 
+pub mod blob;
 mod bots;
 mod channels;
 mod dms;
 pub mod error;
 mod guard;
+mod media;
 mod moderation;
 pub mod state;
+pub mod uploads;
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
@@ -71,6 +74,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/v1/dms/{dm_id}/messages",
             get(dms::list_dm_messages).post(dms::create_dm_message),
+        )
+        .route(
+            "/api/v1/dms/{dm_id}/attachments",
+            post(uploads::upload_to_dm),
         )
         .route("/api/v1/guilds", get(list_guilds).post(create_guild))
         .route("/api/v1/guilds/{guild_id}", get(get_guild))
@@ -141,6 +148,15 @@ pub fn router(state: AppState) -> Router {
             put(channels::pin).delete(channels::unpin),
         )
         .route("/api/v1/channels/{channel_id}/ack", post(channels::ack))
+        // Anhänge
+        .route(
+            "/api/v1/channels/{channel_id}/attachments",
+            post(uploads::upload_to_channel),
+        )
+        .route(
+            "/api/v1/attachments/{attachment_id}",
+            get(uploads::download).delete(uploads::discard),
+        )
         // Bots
         .route("/api/v1/bots", get(bots::list_bots).post(bots::create_bot))
         .route("/api/v1/bots/{bot_id}/token", post(bots::reset_token))

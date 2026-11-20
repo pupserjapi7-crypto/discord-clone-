@@ -4,6 +4,60 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-20 — Uploads: Metadaten filtern statt Bilder neu kodieren
+
+**Entscheidung:** Bilder werden nicht mit `image` neu kodiert (wie in
+`01-architecture.md` §12 geplant), sondern auf Byte-Ebene gefiltert
+(`crates/api/src/media.rs`): EXIF/GPS, XMP, IPTC, Kommentare und PNG-
+Textblöcke fliegen raus, Farbprofile bleiben, die EXIF-Drehung wird als
+minimaler EXIF-Block wieder eingesetzt, Daten hinter dem Bildende werden
+verworfen. Den Typ bestimmen die ersten Bytes; inline gibt es nur JPEG, PNG,
+GIF und WebP bis 16 384 px Kante und 60 MP.
+
+**Warum:** Neu kodieren kostet auf 2 vCores pro Foto 100–300 ms CPU und bis
+zu 100 MB RAM, verschlechtert die Qualität (der reine Rust-Encoder kann nur
+JPEG verlustbehaftet, WebP nur verlustfrei) und bringt die Bild-Codecs als
+Angriffsfläche in den Server. Der Filter streamt, braucht konstant wenig
+Speicher und entfernt, worum es geht: Ortsdaten. Polyglot-Dateien entschärfen
+zusätzlich `X-Content-Type-Options: nosniff`, `Content-Security-Policy:
+default-src 'none'; sandbox` und `Content-Disposition: attachment` für alles,
+was kein Bild ist.
+
+## 2026-11-20 — Uploads: roher Body, Auslieferung durch Axum
+
+**Entscheidung:** `POST …/attachments?filename=` nimmt den rohen Body (kein
+Multipart) und streamt ihn in eine Zwischendatei unter `NOVA_UPLOAD_DIR/tmp`,
+gehasht und gezählt. Ausgeliefert wird durch Axum (`Range`, `ETag`, `304`),
+nicht über `forward_auth` + `file_server` im Reverse-Proxy.
+
+**Warum:** Die Produktion läuft hinter Apache, nicht Caddy; ein Weg für beide
+Proxys. Gestreamt kosten 20 MB im Test 4 MB RAM. Bei unter 500 aktiven
+Nutzern ist die CPU für das Ausliefern vernachlässigbar.
+
+## 2026-11-20 — Nachrichten ohne Text (nur Anhänge)
+
+**Entscheidung:** Migration `0004` ersetzt die Prüfung
+`char_length(content) between 1 and 8000` durch `<= 8000`. Das ist eine
+Lockerung, keine der in `CLAUDE.md` aufgezählten Operationen
+(`add column … default`, Tabellen, Indizes) – aber genauso
+vorwärtskompatibel: ältere Server schreiben weiter nur nicht-leere Texte,
+ältere Clients zeigen leeren Text leer an, nichts wird gelöscht oder
+umbenannt.
+
+**Warum:** Ein Screenshot ohne Kommentar ist der häufigste Upload. Ein
+Platzhaltertext in `content` hätte ältere Clients verwirrt.
+
+## 2026-11-20 — Aufräumen der Blobs mit Sperre statt Zeitfenster
+
+**Entscheidung:** Uploads halten eine Lesesperre (`AppState::blob_gc`) vom
+Ablegen des Blobs bis zur Datenbankzeile; die Bereinigung (alle 15 min) hält
+die Schreibsperre, während sie Verweise prüft und löscht. Verwaiste Uploads
+verschwinden nach 24 h, Blobs ohne Verweis frühestens nach einer Stunde.
+
+**Warum:** Gleiche Inhalte teilen sich einen Blob. Ohne Sperre könnte die
+Bereinigung einen Blob löschen, auf den ein paralleler Upload gerade eine neue
+Zeile anlegt. Ein Prozess, eine Sperre – billiger als Referenzzähler.
+
 ## 2026-11-15 — Streams: H.264 über OpenH264, SFU nur noch H.264 für Video
 
 **Entscheidung:** Der SFU bietet für Video nur noch H.264 Constrained

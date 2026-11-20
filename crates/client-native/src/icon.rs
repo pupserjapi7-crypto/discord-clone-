@@ -39,6 +39,8 @@ pub enum Icon {
     Monitor,
     Maximize,
     Minimize,
+    /// Datei (Anhang ohne Vorschau).
+    File,
 }
 
 struct Glyph {
@@ -441,6 +443,24 @@ impl<M> canvas::Program<M> for Glyph {
                         b.line_to(p(x, y));
                         b.line_to(p(x, y + ey * 5.0));
                     }
+                });
+                frame.stroke(&path, stroke);
+            }
+            Icon::File => {
+                let path = Path::new(|b| {
+                    b.move_to(p(14.0, 2.0));
+                    b.line_to(p(4.0, 2.0));
+                    b.line_to(p(4.0, 22.0));
+                    b.line_to(p(20.0, 22.0));
+                    b.line_to(p(20.0, 8.0));
+                    b.close();
+                    b.move_to(p(14.0, 2.0));
+                    b.line_to(p(14.0, 8.0));
+                    b.line_to(p(20.0, 8.0));
+                    b.move_to(p(8.0, 13.0));
+                    b.line_to(p(16.0, 13.0));
+                    b.move_to(p(8.0, 17.0));
+                    b.line_to(p(13.0, 17.0));
                 });
                 frame.stroke(&path, stroke);
             }

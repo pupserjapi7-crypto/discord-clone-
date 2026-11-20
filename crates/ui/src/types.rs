@@ -148,6 +148,7 @@ pub mod perm {
     pub const SEND_MESSAGES: u64 = 1 << 8;
     pub const MANAGE_MESSAGES: u64 = 1 << 9;
     pub const ADD_REACTIONS: u64 = 1 << 10;
+    pub const ATTACH_FILES: u64 = 1 << 11;
     pub const CONNECT: u64 = 1 << 13;
     pub const SPEAK: u64 = 1 << 14;
     pub const STREAM: u64 = 1 << 15;
@@ -195,6 +196,11 @@ pub mod perm {
             "Archivieren und löschen",
         ),
         (SEND_MESSAGES, "Nachrichten senden", ""),
+        (
+            ATTACH_FILES,
+            "Dateien anhängen",
+            "Bilder und Dateien hochladen",
+        ),
         (CREATE_THREADS, "Threads starten", ""),
         (ADD_REACTIONS, "Reagieren", ""),
         (CONNECT, "Sprachkanälen beitreten", ""),
@@ -213,6 +219,75 @@ pub struct Reaction {
     pub me: bool,
 }
 
+/// Anhang einer Nachricht (ab Server v0.8).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Attachment {
+    pub id: String,
+    pub filename: String,
+    #[serde(default)]
+    pub content_type: String,
+    #[serde(default)]
+    pub size: i64,
+    #[serde(default)]
+    pub width: Option<i32>,
+    #[serde(default)]
+    pub height: Option<i32>,
+}
+
+impl Attachment {
+    /// Relativ statt der absoluten Server-URL: funktioniert unabhängig von
+    /// `NOVA_PUBLIC_ORIGIN` und schickt das Session-Cookie mit.
+    pub fn url(&self) -> String {
+        format!("/api/v1/attachments/{}", self.id)
+    }
+
+    pub fn download_url(&self) -> String {
+        format!("/api/v1/attachments/{}?download=1", self.id)
+    }
+
+    /// Bilder mit bekannter Größe zeigt die UI inline.
+    pub fn is_image(&self) -> bool {
+        self.content_type.starts_with("image/") && self.width.is_some() && self.height.is_some()
+    }
+
+    pub fn is_video(&self) -> bool {
+        matches!(self.content_type.as_str(), "video/mp4" | "video/webm")
+    }
+
+    pub fn is_audio(&self) -> bool {
+        self.content_type.starts_with("audio/")
+    }
+
+    /// Anzeigegröße im Chat: höchstens 400 × 300 px, Seitenverhältnis bleibt.
+    pub fn display_size(&self, max_w: f64, max_h: f64) -> (u32, u32) {
+        let width = f64::from(self.width.unwrap_or(1).max(1));
+        let height = f64::from(self.height.unwrap_or(1).max(1));
+        let scale = (max_w / width).min(max_h / height).min(1.0);
+        (
+            (width * scale).round().max(1.0) as u32,
+            (height * scale).round().max(1.0) as u32,
+        )
+    }
+}
+
+/// Dateigröße für Menschen: „820 B“, „14 KB“, „3,2 MB“.
+pub fn size_label(bytes: i64) -> String {
+    let bytes = bytes.max(0) as f64;
+    if bytes < 1024.0 {
+        return format!("{bytes} B");
+    }
+    if bytes < 1024.0 * 1024.0 {
+        return format!("{} KB", (bytes / 1024.0).round());
+    }
+    let mb = bytes / (1024.0 * 1024.0);
+    let text = if mb < 10.0 {
+        format!("{mb:.1}")
+    } else {
+        format!("{}", mb.round())
+    };
+    format!("{} MB", text.replace('.', ","))
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct Message {
     pub id: String,
@@ -229,6 +304,8 @@ pub struct Message {
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
     /// Nur lokal: Nonce einer noch nicht bestätigten eigenen Nachricht.
     #[serde(skip)]
     pub nonce: Option<u64>,
@@ -366,4 +443,40 @@ pub fn now_string() -> String {
         .to_iso_string()
         .as_string()
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sizes_read_like_german() {
+        assert_eq!(size_label(820), "820 B");
+        assert_eq!(size_label(14 * 1024), "14 KB");
+        assert_eq!(size_label(3_355_443), "3,2 MB");
+        assert_eq!(size_label(25 * 1024 * 1024), "25 MB");
+    }
+
+    #[test]
+    fn images_scale_down_but_never_up() {
+        let photo = Attachment {
+            width: Some(4000),
+            height: Some(3000),
+            content_type: "image/jpeg".into(),
+            ..Default::default()
+        };
+        assert_eq!(photo.display_size(400.0, 300.0), (400, 300));
+        let tall = Attachment {
+            width: Some(600),
+            height: Some(1200),
+            ..photo.clone()
+        };
+        assert_eq!(tall.display_size(400.0, 300.0), (150, 300));
+        let icon = Attachment {
+            width: Some(32),
+            height: Some(32),
+            ..photo
+        };
+        assert_eq!(icon.display_size(400.0, 300.0), (32, 32));
+    }
 }

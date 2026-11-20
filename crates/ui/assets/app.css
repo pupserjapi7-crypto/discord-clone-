@@ -189,6 +189,7 @@ h1, h2, h3, strong, b { font-weight: 700; }
 
 /* Controls ------------------------------------------------------------- */
 
+a.nv-btn, a.nv-iconbtn { text-decoration: none; }
 .nv-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: var(--nv-s-2);
     min-height: 36px; padding: 0 var(--nv-s-4);
@@ -551,6 +552,70 @@ h1, h2, h3, strong, b { font-weight: 700; }
 }
 .nv-emoji button { width: 36px; height: 36px; border-radius: var(--nv-r-control); font-size: 20px; }
 .nv-emoji button:hover { background: var(--nv-bg-3); }
+
+/* Anhänge in Nachrichten. Bilder haben feste Maße (kein Springen beim Laden). */
+.nv-attachments { display: flex; flex-wrap: wrap; gap: var(--nv-s-2); margin-top: var(--nv-s-1); }
+.nv-attach-image {
+    display: block; max-width: 100%; padding: 0; overflow: hidden;
+    border-radius: var(--nv-r-control); background: var(--nv-bg-3); cursor: zoom-in;
+}
+.nv-attach-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.nv-attach-image:focus-visible { outline: 2px solid var(--nv-accent-line); outline-offset: 2px; }
+.nv-attach-video { display: block; width: min(480px, 100%); max-height: 320px; border-radius: var(--nv-r-control); background: var(--nv-bg-0); }
+.nv-attach-file {
+    display: flex; align-items: center; gap: var(--nv-s-3); width: min(420px, 100%);
+    min-height: 56px; padding: var(--nv-s-2) var(--nv-s-2) var(--nv-s-2) var(--nv-s-3);
+    border-radius: var(--nv-r-control); background: var(--nv-bg-3); border: 1px solid var(--nv-line);
+}
+.nv-attach-file__icon { flex: none; color: var(--nv-text-2); display: grid; place-items: center; }
+.nv-attach-file__main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.nv-attach-file__name { font-size: var(--nv-fs-14); font-weight: 700; color: var(--nv-accent-text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nv-attach-file__name:hover { text-decoration: underline; }
+.nv-attach-file__size { font-size: var(--nv-fs-12); color: var(--nv-text-3); font-variant-numeric: tabular-nums; }
+.nv-attach-file audio { width: 100%; height: 32px; margin-top: var(--nv-s-1); }
+.nv-attach-file .nv-iconbtn { flex: none; }
+.nv-pin__file { display: flex; align-items: center; gap: var(--nv-s-1); font-size: var(--nv-fs-13); color: var(--nv-text-2); }
+
+/* Wartende Uploads über dem Eingabefeld */
+.nv-uploads { display: flex; gap: var(--nv-s-2); overflow-x: auto; padding: 0 0 var(--nv-s-2); list-style: none; margin: 0; }
+.nv-upload {
+    flex: none; display: flex; align-items: center; gap: var(--nv-s-2); width: 232px;
+    padding: var(--nv-s-2); border-radius: var(--nv-r-control);
+    background: var(--nv-bg-3); border: 1px solid var(--nv-line);
+}
+.nv-upload.is-failed { border-color: var(--nv-danger); }
+.nv-upload__thumb { flex: none; width: 40px; height: 40px; border-radius: var(--nv-r-badge); object-fit: cover; background: var(--nv-bg-4); }
+.nv-upload__icon { flex: none; width: 40px; height: 40px; border-radius: var(--nv-r-badge); background: var(--nv-bg-4); color: var(--nv-text-2); display: grid; place-items: center; }
+.nv-upload.is-failed .nv-upload__icon { color: var(--nv-danger); }
+.nv-upload__main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.nv-upload__name { font-size: var(--nv-fs-13); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nv-upload__meta { font-size: var(--nv-fs-12); color: var(--nv-text-3); font-variant-numeric: tabular-nums; }
+.nv-upload__error { font-size: var(--nv-fs-12); color: var(--nv-danger); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nv-upload__bar { display: block; height: 4px; border-radius: var(--nv-r-pill); background: var(--nv-bg-4); overflow: hidden; }
+.nv-upload__bar span { display: block; height: 100%; background: var(--nv-accent); transition: width var(--nv-fast) linear; }
+.nv-upload .nv-iconbtn { flex: none; width: 32px; height: 32px; }
+
+/* Dateien über den Chat ziehen */
+.nv-dropzone {
+    display: flex; align-items: center; justify-content: center; gap: var(--nv-s-2);
+    min-height: 56px; margin-bottom: var(--nv-s-2); padding: 0 var(--nv-s-3);
+    border-radius: var(--nv-r-control); border: 2px dashed var(--nv-accent-line);
+    background: var(--nv-accent-soft); color: var(--nv-text-1); font-size: var(--nv-fs-14); font-weight: 700;
+}
+.nv-composer.is-dropping .nv-composer__box { border-color: var(--nv-accent-line); }
+
+/* Bildansicht */
+.nv-viewer { padding: var(--nv-s-4); }
+.nv-viewer__frame { display: grid; gap: var(--nv-s-3); justify-items: center; max-width: 100%; animation: nv-pop var(--nv-base) var(--nv-ease); }
+.nv-viewer__image { display: block; max-width: min(1600px, 92vw); max-height: calc(100vh - 140px); object-fit: contain; border-radius: var(--nv-r-control); background: var(--nv-bg-2); }
+.nv-viewer__bar {
+    display: flex; align-items: center; gap: var(--nv-s-2); flex-wrap: wrap; justify-content: flex-end;
+    padding: var(--nv-s-2) var(--nv-s-2) var(--nv-s-2) var(--nv-s-4); border-radius: var(--nv-r-card);
+    background: var(--nv-bg-4); border: 1px solid var(--nv-line-strong); max-width: 100%;
+}
+.nv-viewer__name { display: grid; min-width: 0; margin-right: auto; font-size: var(--nv-fs-13); }
+.nv-viewer__name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nv-viewer__bar .nv-btn { display: inline-flex; align-items: center; gap: var(--nv-s-2); }
 
 /* Rechte Spalte: Mitglieder / Thread */
 .nv-members, .nv-thread { grid-area: members; background: var(--nv-bg-1); border-left: 1px solid var(--nv-line); display: flex; flex-direction: column; min-height: 0; }

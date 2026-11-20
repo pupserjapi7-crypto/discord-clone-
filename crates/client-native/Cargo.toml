@@ -32,6 +32,11 @@ iced = { version = "0.14", default-features = false, features = [
   "image-without-codecs",
 ] }
 reqwest.workspace = true
+# Anhänge: Bilder selbst dekodieren (nur die Formate, die der Server inline
+# erlaubt) und verkleinert als RGBA an iced geben.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Datei-Dialoge: Windows nativ, Linux über das XDG-Portal (kein GTK nötig).
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 # Voice: dieselbe WebRTC-Bibliothek wie der SFU, Audio-I/O und Opus in Rust
 # (libopus per c2rust übersetzt – keine C-Toolchain nötig).
 str0m = "0.25"

@@ -16,9 +16,17 @@ Der Installer:
 3. **verifiziert den Checksum vor** dem Austausch,
 4. installiert nach `/opt/nova/releases/<tag>/nova` und schaltet `current` atomar um,
 5. legt Benutzer `nova`, `/etc/nova/nova.env` und die systemd-Unit an (falls nicht vorhanden),
-6. führt `nova migrate` aus und startet den Dienst neu.
+6. legt das Upload-Verzeichnis `/var/lib/nova/uploads` an und trägt
+   `NOVA_UPLOAD_DIR` in `nova.env` nach, falls es fehlt (ältere Installationen),
+7. installiert `/usr/local/bin/nova-backup` und einen Cronjob um 03:30
+   (Datenbank-Dump + Uploads nach `/var/backups/nova`), falls beides fehlt,
+8. führt `nova migrate` aus und startet den Dienst neu.
 
-Erneut ausführen ist der Update-Pfad. Optionen: `--version v0.2.0`, `--prefix`, `--no-start`.
+Erneut ausführen ist der Update-Pfad. Optionen: `--version v0.2.0`, `--prefix`,
+`--no-start`, `--no-backup` (kein Backup-Skript und kein Cronjob).
+
+`nova doctor` meldet zusätzlich, ob das Upload-Verzeichnis beschreibbar ist,
+sowie Anzahl und Größe der Anhänge.
 
 Voraussetzungen: root, `curl`, `python3`, `sha256sum`, systemd, PostgreSQL erreichbar. `DATABASE_URL` und `NOVA_PUBLIC_ORIGIN` in `/etc/nova/nova.env` setzen.
 

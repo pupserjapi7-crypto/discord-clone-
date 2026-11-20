@@ -30,6 +30,8 @@ fn auth_header(builder: RequestBuilder) -> RequestBuilder {
 /// Fehlermeldungen des Servers in verständliches Deutsch übersetzen.
 fn friendly(status: u16, code: &str, message: &str) -> String {
     match (status, code) {
+        (413, "quota_exceeded") => "Der Speicherplatz dieses Servers ist voll.".into(),
+        (413, _) => "Die Datei ist zu groß.".into(),
         (401, _) => "Anmeldung abgelaufen oder ungültig.".into(),
         (403, _) => "Dafür fehlen dir die Rechte.".into(),
         (404, _) => "Nicht gefunden – vielleicht wurde es gelöscht.".into(),
@@ -218,6 +220,90 @@ pub async fn create_thread(channel: &str, message: &str, name: &str) -> Result<C
         Some(json!({ "name": name })),
     )
     .await
+}
+
+// ----------------------------------------------------------------- Anhänge
+
+/// Datei roh hochladen (XHR statt fetch, weil nur XHR den Upload-Fortschritt
+/// meldet). `progress` bekommt Werte von 0.0 bis 1.0.
+pub async fn upload(
+    channel: &str,
+    file: &web_sys::File,
+    progress: impl FnMut(f64) + 'static,
+) -> Result<Attachment, String> {
+    use wasm_bindgen::{JsCast, closure::Closure};
+
+    let path = format!(
+        "/api/v1/channels/{channel}/attachments?filename={}",
+        js_sys::encode_uri_component(&file.name())
+    );
+    let xhr = web_sys::XmlHttpRequest::new().map_err(|_| "Upload nicht möglich.".to_string())?;
+    xhr.open_with_async("POST", &path, true)
+        .map_err(|_| "Upload nicht möglich.".to_string())?;
+    xhr.set_with_credentials(true);
+    if let Some(value) = token() {
+        let _ = xhr.set_request_header("authorization", &format!("Bearer {value}"));
+    }
+    let _ = xhr.set_request_header("content-type", "application/octet-stream");
+
+    let mut progress = progress;
+    let on_progress =
+        Closure::<dyn FnMut(web_sys::ProgressEvent)>::new(move |event: web_sys::ProgressEvent| {
+            if event.length_computable() && event.total() > 0.0 {
+                progress((event.loaded() / event.total()).clamp(0.0, 1.0));
+            }
+        });
+    let upload_target = xhr.upload().ok();
+    if let Some(target) = &upload_target {
+        target.set_onprogress(Some(on_progress.as_ref().unchecked_ref()));
+    }
+
+    let (done_tx, done_rx) = futures_channel::oneshot::channel::<bool>();
+    let done_tx = std::rc::Rc::new(std::cell::RefCell::new(Some(done_tx)));
+    let finish = |ok: bool| {
+        let done_tx = std::rc::Rc::clone(&done_tx);
+        Closure::<dyn FnMut()>::new(move || {
+            if let Some(sender) = done_tx.borrow_mut().take() {
+                let _ = sender.send(ok);
+            }
+        })
+    };
+    let on_load = finish(true);
+    let on_error = finish(false);
+    xhr.set_onload(Some(on_load.as_ref().unchecked_ref()));
+    xhr.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+    xhr.set_onabort(Some(on_error.as_ref().unchecked_ref()));
+
+    xhr.send_with_opt_blob(Some(file))
+        .map_err(|_| "Upload nicht möglich.".to_string())?;
+    let loaded = done_rx.await.unwrap_or(false);
+
+    // Handler lösen, bevor die Closures fallen.
+    if let Some(target) = &upload_target {
+        target.set_onprogress(None);
+    }
+    xhr.set_onload(None);
+    xhr.set_onerror(None);
+    xhr.set_onabort(None);
+    drop((on_progress, on_load, on_error));
+
+    if !loaded {
+        return Err("Upload abgebrochen – keine Verbindung zum Server.".into());
+    }
+    let status = xhr.status().unwrap_or(0);
+    let text = xhr.response_text().ok().flatten().unwrap_or_default();
+    if !(200..300).contains(&status) {
+        let parsed = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
+        let code = parsed.get("code").and_then(Value::as_str).unwrap_or("");
+        let message = parsed.get("message").and_then(Value::as_str).unwrap_or("");
+        return Err(friendly(status, code, message));
+    }
+    serde_json::from_str(&text).map_err(|err| format!("Antwort unlesbar: {err}"))
+}
+
+/// Noch nicht gesendeten Upload verwerfen.
+pub async fn discard_attachment(id: &str) -> Result<(), String> {
+    send_empty("DELETE", &format!("/api/v1/attachments/{id}"), None).await
 }
 
 // -------------------------------------------------------------- Moderation

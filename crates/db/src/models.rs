@@ -83,6 +83,9 @@ pub struct Attachment {
     pub id: i64,
     pub channel_id: Option<i64>,
     pub message_id: Option<i64>,
+    /// Direktnachricht statt Server-Kanal (ab v0.8).
+    pub dm_id: Option<i64>,
+    pub dm_message_id: Option<i64>,
     pub uploader_id: i64,
     pub filename: String,
     pub content_type: String,

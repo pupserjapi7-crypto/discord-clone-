@@ -173,7 +173,7 @@ pub struct DmChannelView {
 
 /// JSON can only carry 53-bit integers safely, so browser clients send IDs as
 /// decimal strings. Accept both on the wire; serialize as i64 as before.
-mod id_compat {
+pub mod id_compat {
     use serde::{Deserialize, Deserializer};
 
     #[derive(Deserialize)]
@@ -183,11 +183,27 @@ mod id_compat {
         Str(String),
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
-        match Raw::deserialize(deserializer)? {
-            Raw::Int(value) => Ok(value),
-            Raw::Str(value) => value.parse::<i64>().map_err(serde::de::Error::custom),
+    impl Raw {
+        fn into_id<E: serde::de::Error>(self) -> Result<i64, E> {
+            match self {
+                Raw::Int(value) => Ok(value),
+                Raw::Str(value) => value.parse::<i64>().map_err(E::custom),
+            }
         }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        Raw::deserialize(deserializer)?.into_id()
+    }
+
+    /// Liste von IDs, jede als Zahl oder String.
+    pub fn deserialize_vec<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<i64>, D::Error> {
+        Vec::<Raw>::deserialize(deserializer)?
+            .into_iter()
+            .map(Raw::into_id)
+            .collect()
     }
 }
 
@@ -221,7 +237,8 @@ pub enum ClientOp {
         channel_id: i64,
         content: String,
         reply_to: Option<i64>,
-        #[serde(default)]
+        /// Vorher hochgeladene Anhänge (ab v0.8 ausgewertet).
+        #[serde(default, deserialize_with = "id_compat::deserialize_vec")]
         attachment_ids: Vec<i64>,
     },
     MessageEdit {
@@ -432,6 +449,37 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn attachment_ids_accept_numbers_and_strings() {
+        // MessagePack mit Zahlen (Rust-Clients) …
+        let op = ClientOp::MessageCreate {
+            nonce: 1,
+            channel_id: 42,
+            content: String::new(),
+            reply_to: None,
+            attachment_ids: vec![9_007_199_254_740_993, 5],
+        };
+        let body = rmp_serde::to_vec_named(&op).expect("encode");
+        match decode_body::<ClientOp>(&body).expect("decode") {
+            ClientOp::MessageCreate { attachment_ids, .. } => {
+                assert_eq!(attachment_ids, vec![9_007_199_254_740_993, 5]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        // … und JSON mit Strings (Browser-Bots).
+        let json = r#"{"t":"message_create","d":{"nonce":1,"channel_id":"42","content":"",
+            "reply_to":null,"attachment_ids":["9007199254740993",5]}}"#;
+        match serde_json::from_str::<ClientOp>(json).expect("json") {
+            ClientOp::MessageCreate { attachment_ids, .. } => {
+                assert_eq!(attachment_ids, vec![9_007_199_254_740_993, 5]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        // Ältere Clients lassen das Feld weg.
+        let json = r#"{"t":"message_create","d":{"nonce":1,"channel_id":42,"content":"x","reply_to":null}}"#;
+        assert!(serde_json::from_str::<ClientOp>(json).is_ok());
     }
 
     #[test]

@@ -9,7 +9,12 @@ User=nova
 Group=nova
 WorkingDirectory=/opt/nova/current
 ExecStart=/opt/nova/current/nova serve
+# Standard für Uploads; /etc/nova/nova.env darf ihn überschreiben.
+Environment=NOVA_UPLOAD_DIR=/var/lib/nova/uploads
 EnvironmentFile=/etc/nova/nova.env
+# Legt /var/lib/nova an und gibt es dem Dienstkonto (auch ohne Installer).
+StateDirectory=nova
+StateDirectoryMode=0750
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=60

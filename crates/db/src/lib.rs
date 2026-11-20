@@ -2,6 +2,7 @@
 //!
 //! All queries in the request path use `sqlx` compile-time checked macros.
 
+pub mod attachments;
 pub mod dms;
 pub mod models;
 pub mod repo;

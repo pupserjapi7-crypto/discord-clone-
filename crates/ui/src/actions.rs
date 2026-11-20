@@ -3,13 +3,13 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use dioxus::prelude::*;
+use dioxus::{core::spawn_forever, prelude::*};
 
 use crate::{
     api,
     gateway::Gateway,
     protocol::VoiceState,
-    store::{ConnStatus, Overlay, Store},
+    store::{ConnStatus, Overlay, PendingUpload, Store, UploadState},
     types::*,
     voice,
 };
@@ -295,9 +295,14 @@ pub async fn mark_read(channel_id: String, message_id: String) {
     let _ = api::ack(&channel_id, &message_id).await;
 }
 
-pub fn send_message(mut store: Store, channel_id: String, content: String) {
+pub fn send_message(
+    mut store: Store,
+    channel_id: String,
+    content: String,
+    attachments: Vec<Attachment>,
+) {
     let content = content.trim().to_owned();
-    if content.is_empty() {
+    if content.is_empty() && attachments.is_empty() {
         return;
     }
     let Some(user) = store.user.read().clone() else {
@@ -310,6 +315,10 @@ pub fn send_message(mut store: Store, channel_id: String, content: String) {
         return;
     };
     let nonce = next_nonce();
+    let attachment_ids = attachments
+        .iter()
+        .filter_map(|attachment| attachment.id.parse().ok())
+        .collect();
     store
         .history
         .write()
@@ -322,15 +331,16 @@ pub fn send_message(mut store: Store, channel_id: String, content: String) {
             author: user,
             content: content.clone(),
             created_at: now_string(),
+            attachments,
             nonce: Some(nonce),
             ..Default::default()
         });
-    gateway.send_message(nonce, &channel_id, content);
+    gateway.send_message(nonce, &channel_id, content, attachment_ids);
 }
 
 /// Fehlgeschlagene Nachricht erneut senden.
 pub fn retry_message(mut store: Store, channel_id: String, local_id: String) {
-    let content = {
+    let message = {
         let mut histories = store.history.write();
         let Some(history) = histories.get_mut(&channel_id) else {
             return;
@@ -338,9 +348,93 @@ pub fn retry_message(mut store: Store, channel_id: String, local_id: String) {
         let Some(pos) = history.messages.iter().position(|m| m.id == local_id) else {
             return;
         };
-        history.messages.remove(pos).content
+        history.messages.remove(pos)
     };
-    send_message(store, channel_id, content);
+    send_message(store, channel_id, message.content, message.attachments);
+}
+
+/// Höchstens so viele Anhänge pro Nachricht (wie der Server).
+pub const MAX_ATTACHMENTS: usize = 10;
+
+/// Dateien hochladen und im Composer des Kanals anzeigen. Läuft unabhängig
+/// von der Komponente weiter (Kanalwechsel bricht den Upload nicht ab).
+pub fn attach_files(mut store: Store, channel_id: String, files: Vec<web_sys::File>) {
+    for file in files {
+        let count = store.uploads.read().get(&channel_id).map_or(0, Vec::len);
+        if count >= MAX_ATTACHMENTS {
+            store.error("Höchstens 10 Anhänge pro Nachricht.");
+            break;
+        }
+        let key = next_nonce();
+        let name = file.name();
+        store
+            .uploads
+            .write()
+            .entry(channel_id.clone())
+            .or_default()
+            .push(PendingUpload {
+                key,
+                name: name.clone(),
+                size: file.size() as i64,
+                progress: 0.0,
+                state: UploadState::Uploading,
+            });
+        let channel = channel_id.clone();
+        spawn_forever(async move {
+            let progress_channel = channel.clone();
+            let result = api::upload(&channel, &file, move |value| {
+                let mut uploads = store.uploads.write();
+                if let Some(item) = uploads
+                    .get_mut(&progress_channel)
+                    .and_then(|list| list.iter_mut().find(|item| item.key == key))
+                    && (value - item.progress >= 0.02 || value >= 1.0)
+                {
+                    item.progress = value;
+                }
+            })
+            .await;
+            let mut uploads = store.uploads.write();
+            let item = uploads
+                .get_mut(&channel)
+                .and_then(|list| list.iter_mut().find(|item| item.key == key));
+            match (item, result) {
+                (Some(item), Ok(attachment)) => {
+                    item.progress = 1.0;
+                    item.state = UploadState::Done(attachment);
+                }
+                (Some(item), Err(err)) => {
+                    item.state = UploadState::Failed(err.clone());
+                    drop(uploads);
+                    store.error(format!("{name}: {err}"));
+                }
+                // Inzwischen entfernt: Upload gleich wieder verwerfen.
+                (None, Ok(attachment)) => {
+                    drop(uploads);
+                    let _ = api::discard_attachment(&attachment.id).await;
+                }
+                (None, Err(_)) => {}
+            }
+        });
+    }
+}
+
+/// Anhang aus dem Composer entfernen; fertige Uploads verwirft der Server.
+pub fn remove_upload(mut store: Store, channel_id: &str, key: u64) {
+    let removed = {
+        let mut uploads = store.uploads.write();
+        let Some(list) = uploads.get_mut(channel_id) else {
+            return;
+        };
+        let Some(pos) = list.iter().position(|item| item.key == key) else {
+            return;
+        };
+        list.remove(pos)
+    };
+    if let UploadState::Done(attachment) = removed.state {
+        spawn_forever(async move {
+            let _ = api::discard_attachment(&attachment.id).await;
+        });
+    }
 }
 
 pub async fn load_pins(mut store: Store) {

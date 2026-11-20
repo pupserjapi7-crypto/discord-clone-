@@ -4,7 +4,7 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 
 **Prioritäten:** Voice-Latenz → Performance/Ressourcen → Design/UX → Features → Sicherheit (immer Pflicht).
 
-## Status v0.4.0
+## Status v0.8.0
 
 | Bereich | Zustand |
 |---|---|
@@ -13,12 +13,13 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 | Moderation | **fertig** — Rollen & Kanal-Overrides, Kick, Bann, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log mit UI |
 | Threads | **fertig** — aus Nachricht starten, Seitenleiste, Archivieren, Ungelesen-Stand |
 | Direktnachrichten | **neu (0.6)** — über den Benutzernamen, live über das Gateway; im nativen Client, Web-App folgt |
+| Uploads | **neu (0.8)** — „+“, Ziehen & Ablegen, Einfügen (Web) bzw. Dateidialog (nativ); Bilder inline ohne EXIF/GPS, Dateien als Download; content-addressed `BlobStore`, Quota pro Server, Backup im Installer |
 | Bot-API | **fertig** — `nb_`-Tokens für REST + Gateway, Doku `docs/04-bot-api.md`, Beispiel `examples/echo-bot` |
 | Web-UI | **neues Nova-Design** — Tokens `--nv-*`, Dark/Light/System, Command Palette, Voice-Grid, Einstellungen, Galerie `/dev/gallery` |
 | Voice | Verbindung, Sprecher-Ring, Lautstärke pro Person, Push-to-Talk, Ping, Reconnect, `voice_state_update` statt Polling; **Ende-zu-Ende-Latenz noch nicht gemessen** |
 | Screenshare | Web: 1080p60; nativ: 1080p30 (H.264/OpenH264, Windows + Linux/X11); max. 8 Streams pro Raum |
 | Desktop | Tauri-2-Hülle + nativer iced-Client mit In-App-Update |
-| Offen | Uploads (`BlobStore`), Tauri-Tray/Benachrichtigungen, Simulcast-Schichten, Latenzmessung – siehe `STATUS.md` |
+| Offen | Tauri-Tray/Benachrichtigungen, Simulcast-Schichten, Latenzmessung – siehe `STATUS.md` |
 
 Screenshots: [`docs/screenshots/`](docs/screenshots/).
 

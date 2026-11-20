@@ -1,6 +1,6 @@
 # Nova — Status
 
-**Stand:** 15.11.2026 · **Version:** 0.7.0 (Design „Funkraum“, Schrift Atkinson Hyperlegible Next)
+**Stand:** 20.11.2026 · **Version:** 0.8.0 (Uploads)
 **Live:** <https://85-215-175-202.sslip.io> (läuft noch mit 0.2.2 – Update-Befehle in `docs/06-vps-production.md`)
 
 Fortsetzen: „mach weiter laut STATUS.md“ – der Abschnitt *Offen* ist die
@@ -165,6 +165,52 @@ Server-Release-Build waren vor den Änderungen **grün**.
   Bildschirme in Dark und Light). Nativer Client: 35 MB Working Set nach
   10 s (vorher ~32 MB), erste Ansicht nach 20 ms.
 
+### Uploads (0.8.0, 20.11.2026)
+- **Server:** `BlobStore`-Trait mit `LocalFs` (`NOVA_UPLOAD_DIR/{hash[0..2]}/{hash}`,
+  SHA-256, Dedupe). `POST /channels/{id}/attachments?filename=` und
+  `/dms/{id}/attachments`: roher Body, gestreamt in eine Zwischendatei
+  (20 MB Upload = +4 MB RSS), Limit `NOVA_MAX_UPLOAD_BYTES` (25 MB, auch ohne
+  `Content-Length`), Quota pro Guild (2 GB) bzw. pro Person in DMs (512 MB),
+  20 Uploads/min. Typ aus den ersten Bytes; JPEG/PNG/WebP ohne EXIF/GPS, XMP,
+  IPTC, Textblöcke und Anhängsel nach dem Bildende, Drehung bleibt
+  (`crates/api/src/media.rs`, ohne Neukodieren). SVG und alles andere nur als
+  Download. `GET /attachments/{id}` mit Rechteprüfung, `Range`, `ETag`/`304`,
+  `nosniff`, `CSP: sandbox`; `DELETE` für eigene, ungesendete Uploads.
+  Bereinigung alle 15 min (verwaiste Uploads > 24 h, Blobs ohne Verweis).
+- **Senden:** `attachment_ids` im Gateway (`message_create`) und per REST
+  (Kanal, DM, Bots), Transaktion hängt nur eigene, ungesendete Uploads aus
+  demselben Kanal an; mit Anhang darf der Text leer sein (Migration `0004`).
+  Anhänge auch in Pins und im DM-Verlauf.
+- **Web:** „+“ im Composer, Ziehen & Ablegen auf Verlauf oder Composer,
+  Einfügen aus der Zwischenablage (Screenshots), Fortschritt per XHR,
+  Chips mit Entfernen, Bilder inline mit festen Maßen (kein Springen),
+  Bildansicht mit „Herunterladen“, Videos/Audio mit Player, Dateien als Zeile.
+  Neues Recht „Dateien anhängen“ im Rollen-Editor. Galerie: `?screen=uploads`.
+- **Nativ:** „+“ öffnet den Systemdialog (rfd, unter Linux XDG-Portal statt
+  GTK), Chips mit Status, Bilder als verkleinerte Vorschau (EXIF-Drehung,
+  höchstens 720 px, max. 96 im Speicher), Klick speichert über den
+  Speichern-Dialog, Dateien mit Speichern-Knopf; in Kanälen und DMs.
+- **Installer/Betrieb:** `install.sh` legt `/var/lib/nova/uploads` an, trägt
+  `NOVA_UPLOAD_DIR` auch in bestehende `nova.env` nach (ohne den Eintrag
+  startete der Dienst unter `ProtectSystem=strict` nicht), installiert
+  `nova-backup` (DB-Dump + Uploads) samt Cronjob, `--no-backup` überspringt
+  das. systemd-Unit: `StateDirectory=nova`, Standard für `NOVA_UPLOAD_DIR`.
+  `nova doctor` meldet Schreibbarkeit und Belegung.
+- **Getestet** (20.11.2026, lokal): 2 Integrationstests (Rechte, Metadaten,
+  Range, 304, SVG, Quota-Fehler, Verwerfen, Kanal-Override, Gateway, DMs,
+  Bereinigung samt Blob), Unit-Tests für Typerkennung, JPEG/PNG/WebP-Filter,
+  Range, Dateinamen. Web per Playwright: Auswahl, Fortschritt, Senden,
+  Bildansicht, Download, Reload, Ziehen & Ablegen, Einfügen, Nachricht nur
+  aus Anhang, Dark/Light, Galerie. Nativ unter Xvfb: Vorschau, Datei-Zeile,
+  Chips, Senden mit Anhang (`NOVA_DEV_ATTACH`, da der Dateidialog dort nicht
+  bedienbar ist). Backup-Skript gegen eine echte Datenbank.
+- **Nicht getestet:** Dateidialoge auf echtem Windows/Linux-Desktop,
+  Speichern-Dialog, Uploads über Apache auf dem VPS.
+- **Messwerte:** WASM gzip 527 KB (vorher 502 KB, +25 KB), roh 1.346 KB.
+- Bekannt: Bilder im nativen Client haben eckige Ecken (tiny-skia ignoriert
+  den Radius), Vorschaubilder (Thumbnails) erzeugt der Server nicht – große
+  Fotos lädt die Web-UI in voller Größe.
+
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
   Bann/Entbannen, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log – mit
@@ -199,17 +245,16 @@ WASM 501 KB gzip.
 1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
    Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
    automatisierbar.
-2. **Uploads:** `BlobStore` (content-addressed, SHA-256), Upload-Endpunkt mit
-   Größenlimit, Download nur für Kanalmitglieder, „+“ im Composer.
-3. **Tauri:** CSP statt `null`, Tray (Anzeigen/Beenden), native
+2. **Tauri:** CSP statt `null`, Tray (Anzeigen/Beenden), native
    Benachrichtigungen, Autostart optional. Lokal nicht baubar ohne MSVC/WebView2-SDK;
    die CI baut die Installer.
-4. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
+3. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
    Systemaudio; Kamera.
-5. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
-6. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
+4. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
+5. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
    Ungelesen-Daten für alle Server (die API liefert sie nur für den offenen).
-7. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+6. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+7. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
 
 ---
 

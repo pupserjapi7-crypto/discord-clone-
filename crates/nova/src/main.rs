@@ -126,9 +126,14 @@ async fn serve(role: &str) -> Result<()> {
         );
     }
 
-    tokio::fs::create_dir_all(&cfg.upload_dir)
+    let blobs = nova_api::blob::LocalFs::open(&cfg.upload_dir)
         .await
-        .with_context(|| format!("create upload dir {:?}", cfg.upload_dir))?;
+        .with_context(|| {
+            format!(
+                "open upload dir {:?} (NOVA_UPLOAD_DIR, must be writable)",
+                cfg.upload_dir
+            )
+        })?;
 
     let db = Db::connect(&cfg.database_url, 10).await?;
     db.migrate().await?;
@@ -158,7 +163,11 @@ async fn serve(role: &str) -> Result<()> {
         started: Instant::now(),
         auth_limiter: Arc::clone(&limiter),
         hash_limit: Arc::new(Semaphore::new(cfg.hash_concurrency)),
+        blobs: Arc::new(blobs),
+        blob_gc: Arc::new(tokio::sync::RwLock::new(())),
+        media_limit: Arc::new(Semaphore::new(2)),
     };
+    nova_api::uploads::spawn_janitor(state.clone());
 
     // Janitor for auth rate-limit buckets.
     {
@@ -382,6 +391,21 @@ async fn doctor() -> Result<()> {
     let messages: i64 = sqlx::query_scalar("select count(*) from messages")
         .fetch_one(&db.pool)
         .await?;
+    let (attachments, attachment_bytes): (i64, i64) =
+        sqlx::query_as("select count(*), coalesce(sum(size), 0)::bigint from attachments")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap_or((0, 0));
+    // Schreibprobe im Upload-Verzeichnis (dieselbe Prüfung wie beim Start).
+    let upload_dir_writable = {
+        let probe = cfg.upload_dir.join("tmp").join(".doctor-probe");
+        let ok = tokio::fs::create_dir_all(cfg.upload_dir.join("tmp"))
+            .await
+            .is_ok()
+            && tokio::fs::write(&probe, b"ok").await.is_ok();
+        let _ = tokio::fs::remove_file(&probe).await;
+        ok
+    };
 
     println!(
         "{}",
@@ -394,6 +418,11 @@ async fn doctor() -> Result<()> {
             "guilds": guilds,
             "messages": messages,
             "upload_dir": cfg.upload_dir,
+            "upload_dir_writable": upload_dir_writable,
+            "attachments": attachments,
+            "attachment_bytes": attachment_bytes,
+            "max_upload_bytes": cfg.max_upload_bytes,
+            "guild_upload_quota_bytes": cfg.guild_upload_quota,
             "argon2_m_cost_kib": cfg.argon2_m_cost,
         })
     );

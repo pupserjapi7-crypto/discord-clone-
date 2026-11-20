@@ -17,7 +17,7 @@ Voice genutzt.
 | WebSocket | `ProxyPass /gateway ws://127.0.0.1:8080/gateway` (mod_proxy_wstunnel) |
 | Database | PostgreSQL 17, database/user `nova`, password in `/etc/nova/nova.env` |
 | Uploads | `/var/lib/nova/uploads` |
-| Backups | `/usr/local/bin/nova-backup`, cron 03:30, `/var/backups/nova`, 7 days |
+| Backups | `/usr/local/bin/nova-backup` (`deploy/nova-backup.sh`), cron 03:30, `/var/backups/nova`, DB 7 Tage, Uploads inkrementell |
 | Firewall | ufw active; TCP 22/80/443/8443, UDP 40000–40100 erlaubt; DB-Ports entfernt |
 | Brute force | fail2ban sshd jail (5 failures / 10 min → 1 h ban) |
 | SSH | key-only; `PermitRootLogin prohibit-password`, `PasswordAuthentication no` |
@@ -73,6 +73,28 @@ curl -fsS https://85-215-175-202.sslip.io/readyz
 Voraussetzung: ein Release `v0.4.0` existiert (Tag pushen startet den
 Release-Workflow). Rückweg: vorheriges Binary unter `/opt/nova/releases/`
 verlinken und neu starten – das Schema bleibt kompatibel.
+
+### Update auf 0.8.0 (Uploads)
+
+Migration `0004` ist additiv (zwei Spalten, drei Indizes) und lockert die
+Längenprüfung von `messages.content` auf `<= 8000`, damit Nachrichten nur aus
+Anhängen bestehen können. Uploads landen in `NOVA_UPLOAD_DIR`
+(`/var/lib/nova/uploads`, steht schon in `nova.env`).
+
+```bash
+# als root auf dem VPS
+install -d -o nova -g nova -m 750 /var/lib/nova/uploads
+curl -fsSL https://raw.githubusercontent.com/pupserjapi7-crypto/discord-clone-/v0.8.0/deploy/nova-backup.sh \
+  -o /usr/local/bin/nova-backup && chmod 755 /usr/local/bin/nova-backup   # sichert jetzt auch Uploads
+/usr/local/bin/nova-backup
+su -s /bin/sh nova -c 'NOVA_UPDATE_REPO=pupserjapi7-crypto/discord-clone- /opt/nova/current/nova update --no-restart'
+systemctl restart nova                                       # wendet 0004 beim Start an
+su -s /bin/sh nova -c 'set -a; . /etc/nova/nova.env; /opt/nova/current/nova doctor'   # upload_dir_writable: true
+```
+
+Apache: `LimitRequestBody` ist ab 2.4.54 standardmäßig 1 GB, reicht also für
+25 MB. Wer es kleiner gesetzt hat, muss es für `/api/v1/` mindestens auf
+`NOVA_MAX_UPLOAD_BYTES` anheben.
 
 ## Apache / TLS (eigene vHost-Datei)
 

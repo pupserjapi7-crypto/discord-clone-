@@ -12,6 +12,7 @@ REPO="${NOVA_REPO:-}"
 VERSION="${NOVA_VERSION:-latest}"
 PREFIX="${NOVA_PREFIX:-/opt/nova}"
 START=1
+BACKUP=1
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -19,8 +20,9 @@ while [ $# -gt 0 ]; do
 	--version) VERSION="${2:?--version needs a tag}"; shift 2 ;;
 	--prefix) PREFIX="${2:?--prefix needs a path}"; shift 2 ;;
 	--no-start) START=0; shift ;;
+	--no-backup) BACKUP=0; shift ;;
 	-h | --help)
-		echo "usage: install.sh --repo owner/name [--version vX.Y.Z] [--no-start] [--prefix /opt/nova]"
+		echo "usage: install.sh --repo owner/name [--version vX.Y.Z] [--no-start] [--no-backup] [--prefix /opt/nova]"
 		exit 0
 		;;
 	*)
@@ -98,6 +100,9 @@ if ! id nova >/dev/null 2>&1; then
 	useradd --system --home /var/lib/nova --shell /usr/sbin/nologin nova
 fi
 install -d -o nova -g nova /var/lib/nova
+# Uploads (content-addressed Blobs). Die systemd-Unit erlaubt Schreiben nur
+# unter /var/lib/nova; das Verzeichnis gehört dem Dienstkonto.
+install -d -o nova -g nova -m 750 /var/lib/nova/uploads
 install -d -m 755 /etc/nova
 
 if [ ! -f /etc/nova/nova.env ]; then
@@ -108,6 +113,8 @@ NOVA_PUBLIC_ORIGIN=https://nova.example.com
 NOVA_TRUST_PROXY=true
 NOVA_HASH_CONCURRENCY=1
 NOVA_LISTEN_BACKLOG=4096
+NOVA_UPLOAD_DIR=/var/lib/nova/uploads
+# Optional: NOVA_MAX_UPLOAD_BYTES=26214400, NOVA_GUILD_UPLOAD_QUOTA_BYTES=2147483648
 NOVA_UPDATE_REPO=
 RUST_LOG=info
 EOF
@@ -115,9 +122,32 @@ EOF
 	echo "==> wrote /etc/nova/nova.env — set DATABASE_URL and NOVA_PUBLIC_ORIGIN"
 fi
 
+# Ältere Installationen: ohne NOVA_UPLOAD_DIR zeigt der Standard auf
+# ./data/uploads unter /opt (schreibgeschützt) und der Dienst startet nicht.
+if ! grep -q '^NOVA_UPLOAD_DIR=' /etc/nova/nova.env; then
+	printf '\n# Uploads (ab v0.8)\nNOVA_UPLOAD_DIR=/var/lib/nova/uploads\n' >>/etc/nova/nova.env
+	echo "==> added NOVA_UPLOAD_DIR=/var/lib/nova/uploads to /etc/nova/nova.env"
+fi
+
 if [ ! -f /etc/systemd/system/nova.service ]; then
 	curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/deploy/systemd/nova.service" \
 		-o /etc/systemd/system/nova.service || true
+fi
+
+# Nächtliches Backup (Datenbank + Uploads). Vorhandene Skripte und Cronjobs
+# bleiben unangetastet; --no-backup überspringt den Schritt.
+if [ "$BACKUP" -eq 1 ]; then
+	if [ ! -f /usr/local/bin/nova-backup ] &&
+		curl -fsSL "https://raw.githubusercontent.com/$REPO/$TAG/deploy/nova-backup.sh" -o "$TMP/nova-backup"; then
+		install -m 755 "$TMP/nova-backup" /usr/local/bin/nova-backup
+		echo "==> installed /usr/local/bin/nova-backup"
+	fi
+	if [ -f /usr/local/bin/nova-backup ] && [ -d /etc/cron.d ] && [ ! -f /etc/cron.d/nova-backup ] &&
+		! crontab -l 2>/dev/null | grep -q nova-backup; then
+		echo '30 3 * * * root /usr/local/bin/nova-backup >/var/log/nova-backup.log 2>&1' >/etc/cron.d/nova-backup
+		chmod 644 /etc/cron.d/nova-backup
+		echo "==> nightly backup at 03:30 (/etc/cron.d/nova-backup)"
+	fi
 fi
 
 systemctl daemon-reload

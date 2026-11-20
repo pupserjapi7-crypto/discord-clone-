@@ -21,6 +21,7 @@ pub enum Command {
         nonce: u64,
         channel_id: i64,
         content: String,
+        attachment_ids: Vec<i64>,
     },
     Edit {
         nonce: u64,
@@ -204,12 +205,12 @@ fn run(params: Params) -> impl iced::futures::Stream<Item = GatewayEvent> {
                                 channel = Some(id);
                                 ClientOp::Subscribe { channel_id: id }
                             }
-                            Command::Send { nonce, channel_id, content } => ClientOp::MessageCreate {
+                            Command::Send { nonce, channel_id, content, attachment_ids } => ClientOp::MessageCreate {
                                 nonce,
                                 channel_id,
                                 content,
                                 reply_to: None,
-                                attachment_ids: Vec::new(),
+                                attachment_ids,
                             },
                             Command::Edit { nonce, message_id, content } => ClientOp::MessageEdit { nonce, message_id, content },
                             Command::Delete { nonce, message_id } => ClientOp::MessageDelete { nonce, message_id },

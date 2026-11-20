@@ -91,6 +91,24 @@ pub fn validate_message_content(content: &str, max_len: usize) -> Result<(), &'s
     Ok(())
 }
 
+/// Höchstens so viele Anhänge pro Nachricht.
+pub const MAX_ATTACHMENTS: usize = 10;
+
+/// Wie [`validate_message_content`], aber mit Anhängen darf der Text leer sein.
+pub fn validate_message_body(
+    content: &str,
+    max_len: usize,
+    attachments: usize,
+) -> Result<(), &'static str> {
+    if attachments > MAX_ATTACHMENTS {
+        return Err("too many attachments");
+    }
+    if attachments > 0 && content.trim().is_empty() {
+        return Ok(());
+    }
+    validate_message_content(content, max_len)
+}
+
 pub fn validate_emoji(emoji: &str) -> Result<(), &'static str> {
     let count = emoji.chars().count();
     if count == 0 || count > MAX_EMOJI_LEN {
@@ -187,6 +205,15 @@ mod tests {
         assert!(validate_message_content(&"x".repeat(8001), 8000).is_err());
         assert!(validate_message_content("a\u{0}b", 8000).is_err());
         assert!(validate_message_content("line\nbreak\tok", 8000).is_ok());
+    }
+
+    #[test]
+    fn attachments_allow_empty_text() {
+        assert!(validate_message_body("", 8000, 1).is_ok());
+        assert!(validate_message_body("  ", 8000, 2).is_ok());
+        assert!(validate_message_body("", 8000, 0).is_err());
+        assert!(validate_message_body("x", 8000, MAX_ATTACHMENTS + 1).is_err());
+        assert!(validate_message_body("a\u{0}b", 8000, 1).is_err());
     }
 
     #[test]

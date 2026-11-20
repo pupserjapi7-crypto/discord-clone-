@@ -27,8 +27,36 @@ pub fn Shell() -> Element {
         if thread_open { "has-thread" } else { "" },
         if nav_open() { "nav-open" } else { "" },
     ]);
+    // Dateien über das Fenster ziehen: Zähler statt Flag, weil `dragenter`/
+    // `dragleave` bei jedem Kindelement feuern.
+    let drag_depth = use_hook(|| std::rc::Rc::new(std::cell::Cell::new(0i32)));
+    let enter_depth = std::rc::Rc::clone(&drag_depth);
+    let leave_depth = std::rc::Rc::clone(&drag_depth);
+    let drop_depth = std::rc::Rc::clone(&drag_depth);
+    let mut dragging = store.dragging;
     rsx! {
-        div { class: "{class}",
+        div {
+            class: "{class}",
+            ondragenter: move |_| {
+                enter_depth.set(enter_depth.get() + 1);
+                if !*dragging.peek() {
+                    dragging.set(true);
+                }
+            },
+            ondragleave: move |_| {
+                leave_depth.set((leave_depth.get() - 1).max(0));
+                if leave_depth.get() == 0 {
+                    dragging.set(false);
+                }
+            },
+            // Abgelegte Dateien außerhalb des Chats öffnen sonst die Datei
+            // im Tab und die App ist weg.
+            ondragover: move |event: DragEvent| event.prevent_default(),
+            ondrop: move |event: DragEvent| {
+                event.prevent_default();
+                drop_depth.set(0);
+                dragging.set(false);
+            },
             ServerRail {}
             ChannelSidebar {}
             div { class: "nv-scrim", onclick: move |_| store.nav_open.clone().set(false) }

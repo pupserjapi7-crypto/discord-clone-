@@ -31,6 +31,7 @@ enum Command {
         nonce: u64,
         channel_id: i64,
         content: String,
+        attachment_ids: Vec<i64>,
     },
     Edit {
         nonce: u64,
@@ -65,12 +66,19 @@ impl Gateway {
         }
     }
 
-    pub fn send_message(&self, nonce: u64, channel_id: &str, content: String) {
+    pub fn send_message(
+        &self,
+        nonce: u64,
+        channel_id: &str,
+        content: String,
+        attachment_ids: Vec<i64>,
+    ) {
         if let Ok(channel_id) = channel_id.parse() {
             self.command(Command::Send {
                 nonce,
                 channel_id,
                 content,
+                attachment_ids,
             });
         }
     }
@@ -255,12 +263,12 @@ async fn run(token: String, mut store: Store, mut rx: UnboundedReceiver<Command>
                             channel = Some(id);
                             Some(ClientOp::Subscribe { channel_id: id })
                         }
-                        Some(Command::Send { nonce, channel_id, content }) => Some(ClientOp::MessageCreate {
+                        Some(Command::Send { nonce, channel_id, content, attachment_ids }) => Some(ClientOp::MessageCreate {
                             nonce,
                             channel_id,
                             content,
                             reply_to: None,
-                            attachment_ids: Vec::new(),
+                            attachment_ids,
                         }),
                         Some(Command::Edit { nonce, message_id, content }) => {
                             Some(ClientOp::MessageEdit { nonce, message_id, content })

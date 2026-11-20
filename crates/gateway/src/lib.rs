@@ -39,6 +39,7 @@ use nova_common::{
 };
 use nova_db::{
     Db, PermCache,
+    attachments::InsertOutcome,
     models::{CHANNEL_THREAD, MessageRow},
     views,
 };
@@ -699,7 +700,7 @@ impl Gateway {
                 channel_id,
                 content,
                 reply_to,
-                attachment_ids: _,
+                attachment_ids,
             } => {
                 let started = Instant::now();
                 if !lock(&session.msg_bucket).allow() {
@@ -715,9 +716,15 @@ impl Gateway {
                     self.send_error(session, "forbidden", "cannot send messages", Some(nonce));
                     return;
                 }
-                if let Err(msg) =
-                    validate::validate_message_content(&content, self.cfg.max_message_len)
-                {
+                if !attachment_ids.is_empty() && !perms.contains(Permissions::ATTACH_FILES) {
+                    self.send_error(session, "forbidden", "cannot attach files", Some(nonce));
+                    return;
+                }
+                if let Err(msg) = validate::validate_message_body(
+                    &content,
+                    self.cfg.max_message_len,
+                    attachment_ids.len(),
+                ) {
                     self.send_error(session, "bad_request", msg, Some(nonce));
                     return;
                 }
@@ -726,12 +733,35 @@ impl Gateway {
                     return;
                 }
                 let id = self.ids.next_id();
-                let created_at = match self
-                    .db
-                    .insert_message(id, channel_id, user_id, &content, reply_to)
-                    .await
-                {
-                    Ok(ts) => ts,
+                let stored = if attachment_ids.is_empty() {
+                    self.db
+                        .insert_message(id, channel_id, user_id, &content, reply_to)
+                        .await
+                        .map(|created_at| InsertOutcome::Stored {
+                            created_at,
+                            attachments: Vec::new(),
+                        })
+                } else {
+                    self.db
+                        .insert_message_with_attachments(
+                            id,
+                            channel_id,
+                            user_id,
+                            &content,
+                            reply_to,
+                            &attachment_ids,
+                        )
+                        .await
+                };
+                let (created_at, attachments) = match stored {
+                    Ok(InsertOutcome::Stored {
+                        created_at,
+                        attachments,
+                    }) => (created_at, attachments),
+                    Ok(InsertOutcome::InvalidAttachments) => {
+                        self.send_error(session, "bad_request", "unknown attachment", Some(nonce));
+                        return;
+                    }
                     Err(err) => {
                         warn!(error = %err, "insert message failed");
                         self.send_error(
@@ -766,7 +796,12 @@ impl Gateway {
                     edited_at: None,
                     reply_to,
                     reactions: Vec::new(),
-                    attachments: Vec::new(),
+                    attachments: attachments
+                        .iter()
+                        .map(|attachment| {
+                            views::attachment_view(&self.cfg.public_origin, attachment)
+                        })
+                        .collect(),
                     pinned: false,
                 };
                 self.dispatch_channel(channel_id, &Event::MessageCreate { message: view });

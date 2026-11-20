@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Message, Reaction, User};
+use crate::types::{Attachment, Message, Reaction, User};
 
 pub const HEADER_LEN: usize = 10;
 pub const OP_HELLO: u8 = 1;
@@ -139,6 +139,20 @@ struct WireUser {
 }
 
 #[derive(Debug, Deserialize)]
+struct WireAttachment {
+    id: i64,
+    filename: String,
+    #[serde(default)]
+    content_type: String,
+    #[serde(default)]
+    size: i64,
+    #[serde(default)]
+    width: Option<i32>,
+    #[serde(default)]
+    height: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WireMessage {
     id: i64,
     channel_id: i64,
@@ -154,6 +168,8 @@ struct WireMessage {
     reactions: Vec<Reaction>,
     #[serde(default)]
     pinned: bool,
+    #[serde(default)]
+    attachments: Vec<WireAttachment>,
 }
 
 fn convert(message: WireMessage) -> Message {
@@ -174,6 +190,18 @@ fn convert(message: WireMessage) -> Message {
         reply_to: message.reply_to.map(|id| id.to_string()),
         reactions: message.reactions,
         pinned: message.pinned,
+        attachments: message
+            .attachments
+            .into_iter()
+            .map(|attachment| Attachment {
+                id: attachment.id.to_string(),
+                filename: attachment.filename,
+                content_type: attachment.content_type,
+                size: attachment.size,
+                width: attachment.width,
+                height: attachment.height,
+            })
+            .collect(),
         nonce: None,
         failed: false,
     }
@@ -364,6 +392,64 @@ mod tests {
             let decoded = decode(&frame).expect("frame");
             let _: server::ClientOp = server::decode_body(&decoded.body).expect("server decode");
         }
+    }
+
+    #[test]
+    fn message_with_attachments_matches_the_server() {
+        let op = ClientOp::MessageCreate {
+            nonce: 3,
+            channel_id: 5,
+            content: String::new(),
+            reply_to: None,
+            attachment_ids: vec![9_007_199_254_740_993],
+        };
+        let frame = encode(OP_REQUEST, 0, &op).expect("encode");
+        let decoded = decode(&frame).expect("frame");
+        match server::decode_body::<server::ClientOp>(&decoded.body).expect("server decode") {
+            server::ClientOp::MessageCreate { attachment_ids, .. } => {
+                assert_eq!(attachment_ids, vec![9_007_199_254_740_993]);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        let event = server::Event::MessageCreate {
+            message: server::MessageView {
+                id: 1,
+                channel_id: 5,
+                author: server::UserPublic {
+                    id: 2,
+                    handle: "mara".into(),
+                    display_name: "Mara".into(),
+                    avatar_url: None,
+                    status: 0,
+                    bot: false,
+                },
+                content: String::new(),
+                created_at: chrono::Utc::now(),
+                edited_at: None,
+                reply_to: None,
+                reactions: vec![],
+                attachments: vec![server::AttachmentView {
+                    id: 9_007_199_254_740_993,
+                    filename: "karte.png".into(),
+                    content_type: "image/png".into(),
+                    size: 2048,
+                    width: Some(640),
+                    height: Some(480),
+                    url: "https://nova.example/api/v1/attachments/9007199254740993".into(),
+                }],
+                pinned: false,
+            },
+        };
+        let body = rmp_serde::to_vec_named(&event).expect("encode");
+        let Some(Dispatched::Created(message)) = parse_dispatch(&body) else {
+            panic!("kein MessageCreate");
+        };
+        assert_eq!(message.attachments.len(), 1);
+        let attachment = &message.attachments[0];
+        assert_eq!(attachment.id, "9007199254740993");
+        assert!(attachment.is_image());
+        assert_eq!(attachment.url(), "/api/v1/attachments/9007199254740993");
     }
 
     #[test]

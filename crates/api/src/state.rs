@@ -13,9 +13,9 @@ use nova_common::{config::Config, ids::Snowflake, metrics::Metrics, tokens::Toke
 use nova_db::Db;
 use nova_gateway::Gateway;
 use nova_sfu::Sfu;
-use tokio::sync::Semaphore;
+use tokio::sync::{RwLock, Semaphore};
 
-use crate::error::ApiError;
+use crate::{blob::BlobStore, error::ApiError};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -31,6 +31,13 @@ pub struct AppState {
     /// Bounds concurrent Argon2 work: hashing is memory-hard and must never
     /// starve the gateway/SFU runtimes.
     pub hash_limit: Arc<Semaphore>,
+    /// Ablage der Upload-Bytes (content-addressed).
+    pub blobs: Arc<dyn BlobStore>,
+    /// Uploads halten die Lese-, die Bereinigung die Schreibsperre: so löscht
+    /// sie nie einen Blob, auf den gerade eine neue Zeile entsteht.
+    pub blob_gc: Arc<RwLock<()>>,
+    /// Begrenzt gleichzeitige Bildbearbeitung (Plattenlast, nicht CPU).
+    pub media_limit: Arc<Semaphore>,
 }
 
 impl AppState {

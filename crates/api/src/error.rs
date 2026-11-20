@@ -13,6 +13,8 @@ pub enum ApiError {
     NotFound,
     Conflict(String),
     TooLarge,
+    /// Speicherkontingent der Guild bzw. für DMs erschöpft.
+    QuotaExceeded,
     RateLimited,
     Internal(anyhow::Error),
 }
@@ -29,7 +31,7 @@ impl ApiError {
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::TooLarge | Self::QuotaExceeded => StatusCode::PAYLOAD_TOO_LARGE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -43,6 +45,7 @@ impl ApiError {
             Self::NotFound => "not_found",
             Self::Conflict(_) => "conflict",
             Self::TooLarge => "too_large",
+            Self::QuotaExceeded => "quota_exceeded",
             Self::RateLimited => "rate_limited",
             Self::Internal(_) => "internal",
         }
@@ -55,6 +58,7 @@ impl ApiError {
             Self::Forbidden => "you lack permission for this action".into(),
             Self::NotFound => "not found".into(),
             Self::TooLarge => "payload too large".into(),
+            Self::QuotaExceeded => "storage quota exceeded".into(),
             Self::RateLimited => "too many requests".into(),
             Self::Internal(_) => "internal server error".into(),
         }

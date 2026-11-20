@@ -8,10 +8,10 @@ use axum::{
 };
 use nova_common::{
     permissions::Permissions,
-    protocol::{Event, MessageView},
+    protocol::{Event, MessageView, id_compat},
     validate,
 };
-use nova_db::{models::CHANNEL_THREAD, views};
+use nova_db::{attachments::InsertOutcome, models::CHANNEL_THREAD, views};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -155,8 +155,13 @@ pub(crate) async fn delete_channel(
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct CreateMessage {
+    /// Mit Anhängen darf der Text leer sein (ab v0.8).
+    #[serde(default)]
     content: String,
     reply_to: Option<i64>,
+    /// Vorher über `POST /channels/{id}/attachments` hochgeladen.
+    #[serde(default, deserialize_with = "id_compat::deserialize_vec")]
+    attachment_ids: Vec<i64>,
 }
 
 /// Nachricht per REST senden – gleiche Regeln wie über das Gateway
@@ -176,8 +181,15 @@ pub(crate) async fn create_message(
     if !perms.contains(Permissions::SEND_MESSAGES) {
         return Err(ApiError::Forbidden);
     }
-    validate::validate_message_content(&body.content, state.cfg.max_message_len)
-        .map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
+    if !body.attachment_ids.is_empty() && !perms.contains(Permissions::ATTACH_FILES) {
+        return Err(ApiError::Forbidden);
+    }
+    validate::validate_message_body(
+        &body.content,
+        state.cfg.max_message_len,
+        body.attachment_ids.len(),
+    )
+    .map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
     if !state.auth_limiter.allow(
         format!("msg:{}", auth.user_id),
         state.cfg.msg_burst,
@@ -201,21 +213,49 @@ pub(crate) async fn create_message(
         .await?
         .ok_or(ApiError::Unauthorized)?;
     let id = state.ids.next_id();
-    let created_at = state
-        .db
-        .insert_message(id, channel_id, auth.user_id, &body.content, body.reply_to)
-        .await?;
+    let (created_at, attachments) = if body.attachment_ids.is_empty() {
+        let created_at = state
+            .db
+            .insert_message(id, channel_id, auth.user_id, &body.content, body.reply_to)
+            .await?;
+        (created_at, Vec::new())
+    } else {
+        match state
+            .db
+            .insert_message_with_attachments(
+                id,
+                channel_id,
+                auth.user_id,
+                &body.content,
+                body.reply_to,
+                &body.attachment_ids,
+            )
+            .await?
+        {
+            InsertOutcome::Stored {
+                created_at,
+                attachments,
+            } => (created_at, attachments),
+            InsertOutcome::InvalidAttachments => {
+                return Err(ApiError::BadRequest("unknown attachment".into()));
+            }
+        }
+    };
     state.metrics.messages_created.inc();
+    let base = &state.cfg.public_origin;
     let view = MessageView {
         id,
         channel_id,
-        author: views::user_public(&state.cfg.public_origin, &author),
+        author: views::user_public(base, &author),
         content: body.content,
         created_at,
         edited_at: None,
         reply_to: body.reply_to,
         reactions: Vec::new(),
-        attachments: Vec::new(),
+        attachments: attachments
+            .iter()
+            .map(|attachment| views::attachment_view(base, attachment))
+            .collect(),
         pinned: false,
     };
     state.gateway.publish_channel(
@@ -341,10 +381,18 @@ pub(crate) async fn list_pins(
         return Err(ApiError::Forbidden);
     }
     let rows = state.db.pinned_messages(channel_id).await?;
+    let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+    let mut attachments = state.db.attachments_for(&ids).await?;
     let base = &state.cfg.public_origin;
     let views: Vec<MessageView> = rows
         .into_iter()
-        .map(|row| views::message_view(base, row, Vec::new(), Vec::new()))
+        .map(|row| {
+            let (own, rest) = attachments
+                .drain(..)
+                .partition(|attachment| attachment.message_id == Some(row.id));
+            attachments = rest;
+            views::message_view(base, row, Vec::new(), own)
+        })
         .collect();
     Ok(json_ids(&views))
 }

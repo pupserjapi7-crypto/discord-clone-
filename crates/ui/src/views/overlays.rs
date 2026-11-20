@@ -29,6 +29,7 @@ pub fn OverlayHost() -> Element {
         Overlay::Palette => rsx! { Palette {} },
         Overlay::Member(user_id) => rsx! { MemberCard { user_id } },
         Overlay::Confirm(action) => rsx! { Confirm { action } },
+        Overlay::Image(attachment) => rsx! { ImageViewer { attachment } },
     }
 }
 
@@ -798,6 +799,56 @@ fn Palette() -> Element {
                     span { Kbd { "↑" } Kbd { "↓" } "auswählen" }
                     span { Kbd { "Enter" } "öffnen" }
                     span { Kbd { "Strg K" } "schließen" }
+                }
+            }
+        }
+    }
+}
+
+/// Bild in voller Größe; Esc, Klick daneben oder „Schließen“ beendet.
+#[component]
+fn ImageViewer(attachment: Attachment) -> Element {
+    let store = use_store();
+    use_effect(|| focus_first("image-viewer"));
+    let size = attachment
+        .width
+        .zip(attachment.height)
+        .map(|(w, h)| format!("{w} × {h} · {}", size_label(attachment.size)))
+        .unwrap_or_else(|| size_label(attachment.size));
+    rsx! {
+        div {
+            class: "nv-backdrop nv-viewer",
+            onclick: move |_| store.close_overlay(),
+            div {
+                id: "image-viewer",
+                class: "nv-viewer__frame",
+                role: "dialog",
+                "aria-modal": "true",
+                "aria-label": "Bild {attachment.filename}",
+                onclick: move |event| event.stop_propagation(),
+                onkeydown: move |event| {
+                    if event.key() == Key::Escape {
+                        store.close_overlay();
+                    }
+                },
+                img {
+                    class: "nv-viewer__image",
+                    src: "{attachment.url()}",
+                    alt: "{attachment.filename}",
+                }
+                div { class: "nv-viewer__bar",
+                    div { class: "nv-viewer__name",
+                        strong { "{attachment.filename}" }
+                        span { class: "nv-faint", "{size}" }
+                    }
+                    a {
+                        class: "nv-btn nv-btn--ghost",
+                        href: "{attachment.download_url()}",
+                        download: "{attachment.filename}",
+                        Icon { name: "download", size: 16 }
+                        "Herunterladen"
+                    }
+                    button { class: "nv-btn", r#type: "button", onclick: move |_| store.close_overlay(), "Schließen" }
                 }
             }
         }

@@ -17,6 +17,12 @@ pub struct Config {
     pub max_message_len: usize,
     pub max_upload_bytes: usize,
     pub max_avatar_bytes: usize,
+    /// Speicher pro Guild für Anhänge (`NOVA_GUILD_UPLOAD_QUOTA_BYTES`).
+    pub guild_upload_quota: u64,
+    /// Speicher pro Person für Anhänge in Direktnachrichten.
+    pub dm_upload_quota: u64,
+    /// Uploads pro Person und Minute (zugleich der Burst).
+    pub uploads_per_minute: f64,
     pub argon2_m_cost: u32,
     pub argon2_t_cost: u32,
     pub argon2_p_cost: u32,
@@ -70,6 +76,9 @@ impl Config {
             max_message_len: parse_or("NOVA_MAX_MESSAGE_LEN", 8_000)?,
             max_upload_bytes: parse_or("NOVA_MAX_UPLOAD_BYTES", 25 * 1024 * 1024)?,
             max_avatar_bytes: parse_or("NOVA_MAX_AVATAR_BYTES", 2 * 1024 * 1024)?,
+            guild_upload_quota: parse_or("NOVA_GUILD_UPLOAD_QUOTA_BYTES", 2 * 1024 * 1024 * 1024)?,
+            dm_upload_quota: parse_or("NOVA_DM_UPLOAD_QUOTA_BYTES", 512 * 1024 * 1024)?,
+            uploads_per_minute: parse_or("NOVA_UPLOADS_PER_MINUTE", 20.0)?,
             argon2_m_cost: parse_or("NOVA_ARGON2_M_COST", 19_456)?,
             argon2_t_cost: parse_or("NOVA_ARGON2_T_COST", 2)?,
             argon2_p_cost: parse_or("NOVA_ARGON2_P_COST", 1)?,
