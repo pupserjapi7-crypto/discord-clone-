@@ -211,6 +211,32 @@ Server-Release-Build waren vor den Änderungen **grün**.
   den Radius), Vorschaubilder (Thumbnails) erzeugt der Server nicht – große
   Fotos lädt die Web-UI in voller Größe.
 
+### Kanal-Rechte, Foren und Webhooks (0.8.0, 20.11.2026)
+- **Rechte-Editor** (Server-Einstellungen → Kanäle → Bearbeiten): pro Rolle
+  oder Mitglied und Recht „Verweigern / Standard / Erlauben“, sofort
+  gespeichert; „Alles auf Standard“ löscht den Override. Neu:
+  `GET /channels/{id}/overrides`. Text/Forum: Sehen, Schreiben, Verlauf,
+  Reagieren, Anhängen, Threads starten, Nachrichten/Threads verwalten;
+  Sprache: Sehen, Beitreten, Sprechen, Video senden.
+- **Foren** (`kind = 3`): Anlegen im Kanal-Dialog, Beitragsliste (Titel,
+  Vorschau, Autor, Antworten, zuletzt aktive oben), „Neuer Beitrag“, ein Klick
+  öffnet den Beitrag als Thread rechts. Direkt ins Forum schreiben lehnen
+  Gateway und REST ab. Nativer Client: Foren bei den Textkanälen, Beiträge
+  als Threads darunter, Hinweis statt Eingabezeile (Beiträge starten nur in
+  der Web-App).
+- **Webhooks:** anlegen/löschen pro Textkanal (`MANAGE_WEBHOOKS`, neu im
+  Rollen-Editor), URL einmal sichtbar mit Kopieren, `POST
+  /webhooks/{id}/{token}` postet als Bot-Konto des Webhooks, rate-limitiert.
+  Migration `0005_forums_webhooks` (nur neue Tabelle).
+- **Getestet:** Integrationstest `forums_webhooks_and_channel_overrides`
+  (Forum ohne Direktnachrichten, Beitrag mit Anhang, Antworten-Zähler,
+  Override lesen/verbieten, Webhook-Rechte, falsches Token 404, Ausführen,
+  Löschen); im Browser: Forum per Dialog, Beitrag, Antwort, Override setzen
+  und zurücknehmen, Webhook anlegen, per URL auslösen, Nachricht von
+  „Build-Bot“ im Kanal.
+- **Nicht gebaut:** Forum-Tags und Sortierung, Webhook-Namen pro Nachricht
+  überschreiben, Forum in der Komponenten-Galerie (braucht den Server).
+
 ### Screenshare, Simulcast und Kamera (0.8.0, 20.11.2026)
 - **Simulcast mit Schichtwahl:** Bildschirm und Kamera senden aus dem Browser
   drei H.264-Schichten (voll, ½, ¼). Der SFU wählt pro Empfänger und Spur die
@@ -302,15 +328,15 @@ WASM 501 KB gzip.
 1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
    Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
    automatisierbar.
-2. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
-3. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
+2. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
    Ungelesen-Daten für alle Server (die API liefert sie nur für den offenen).
-4. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
-5. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
-6. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
+3. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+4. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
+5. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
    Code-Signing, Tauri-Updater.
-7. Video: Kamera im nativen Client (Senden und Anzeigen), Schichtwahl im
+6. Video: Kamera im nativen Client (Senden und Anzeigen), Schichtwahl im
    nativen Client (empfängt immer „h“).
+7. Foren: Tags, Sortierung; Beiträge im nativen Client starten.
 
 ---
 

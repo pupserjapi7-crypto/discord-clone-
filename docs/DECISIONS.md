@@ -4,6 +4,21 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-20 — Foren als Threads, Webhooks mit eigenem Bot-Konto
+
+**Entscheidung:** Ein Forum ist ein Kanal `kind = 3` ohne eigene Nachrichten;
+jeder Beitrag ist ein gewöhnlicher Thread (`kind = 2`, `parent_id` = Forum),
+dessen erste Nachricht im Thread liegt und `root_message_id` ist. Webhooks
+bekommen je ein Bot-Konto (`hook.{id}`) und posten darüber; vom Token wird nur
+der SHA-256 gespeichert, die URL gibt es einmal. Verwalten mit dem
+vorhandenen Bit `MANAGE_WEBHOOKS`.
+
+**Warum:** Threads können schon alles, was ein Beitrag braucht (Antworten,
+Archivieren, Ungelesen, Rechte vom Elternkanal); keine zweite
+Nachrichtentabelle. Ein Konto pro Webhook hält den Nachrichtenpfad
+unverändert (Absender, Bot-Kennzeichen, Gateway-Dispatch) und braucht nur
+die neue Tabelle `webhooks` (Migration `0005`).
+
 ## 2026-11-20 — Echtes Simulcast mit Schichtwahl pro Empfänger
 
 **Entscheidung:** Bildschirm und Kamera senden aus dem Browser drei H.264-

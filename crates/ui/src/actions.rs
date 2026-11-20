@@ -177,8 +177,9 @@ pub async fn open_channel(mut store: Store, channel_id: String) {
     if let Some(gateway) = store.gateway.read().clone() {
         gateway.subscribe(&channel_id);
     }
-    let is_voice = channel.map(|c| c.kind == KIND_VOICE).unwrap_or(false);
-    if !is_voice {
+    // Sprachkanäle und Foren haben keinen Nachrichtenverlauf.
+    let has_history = channel.is_none_or(|c| c.kind != KIND_VOICE && c.kind != KIND_FORUM);
+    if has_history {
         load_history(store, channel_id).await;
     }
 }

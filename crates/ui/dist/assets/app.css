@@ -604,6 +604,58 @@ a.nv-btn, a.nv-iconbtn { text-decoration: none; }
 }
 .nv-composer.is-dropping .nv-composer__box { border-color: var(--nv-accent-line); }
 
+/* Forum: Beiträge als Zeilen, der offene Beitrag wie ein ausgewählter Kanal. */
+.nv-forum { flex: 1; min-height: 0; overflow-y: auto; padding: var(--nv-s-4) var(--nv-s-6) var(--nv-s-6); display: grid; gap: var(--nv-s-4); align-content: start; }
+.nv-forum__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--nv-s-4); flex-wrap: wrap; }
+.nv-forum__bar .nv-btn { display: inline-flex; align-items: center; gap: var(--nv-s-2); }
+.nv-posts { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.nv-post {
+    width: 100%; display: grid; gap: 4px; text-align: left;
+    padding: var(--nv-s-3) var(--nv-s-4); border-radius: var(--nv-r-control);
+    background: var(--nv-bg-3); border: 1px solid var(--nv-line);
+}
+.nv-post:hover { background: var(--nv-bg-4); }
+.nv-post.is-active { background: var(--nv-accent-soft); box-shadow: inset 2px 0 0 var(--nv-accent-line); }
+.nv-post:focus-visible { outline: 2px solid var(--nv-accent-line); outline-offset: 2px; }
+.nv-post__title { font-size: var(--nv-fs-15); font-weight: 700; color: var(--nv-text-1); display: flex; align-items: center; gap: var(--nv-s-2); }
+.nv-post__preview { font-size: var(--nv-fs-14); color: var(--nv-text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.nv-post__meta { display: flex; flex-wrap: wrap; gap: var(--nv-s-3); font-size: var(--nv-fs-12); color: var(--nv-text-3); }
+.nv-post__replies { display: inline-flex; align-items: center; gap: 4px; }
+.nv-textarea { min-height: 120px; resize: vertical; padding-top: var(--nv-s-2); line-height: 1.5; }
+
+/* Kanal-Berechtigungen: links Rollen/Mitglieder, rechts die Rechte. */
+.nv-overrides { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--nv-s-4); align-items: start; }
+.nv-overrides__targets { display: grid; gap: 2px; }
+.nv-overrides__target {
+    display: flex; align-items: center; gap: var(--nv-s-2); min-height: 36px; padding: 0 var(--nv-s-3);
+    border-radius: var(--nv-r-control); color: var(--nv-text-2); text-align: left;
+}
+.nv-overrides__target span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nv-overrides__target:hover { background: var(--nv-bg-3); color: var(--nv-text-1); }
+.nv-overrides__target.is-selected { background: var(--nv-accent-soft); color: var(--nv-text-1); box-shadow: inset 2px 0 0 var(--nv-accent-line); }
+.nv-overrides__targets .nv-select { margin-top: var(--nv-s-2); min-height: 36px; }
+.nv-overrides__perms { display: grid; gap: 2px; }
+.nv-perm { display: flex; align-items: center; justify-content: space-between; gap: var(--nv-s-3); padding: var(--nv-s-2) 0; border-bottom: 1px solid var(--nv-line); }
+.nv-perm:last-child { border-bottom: 0; }
+.nv-perm__text { display: grid; min-width: 0; }
+.nv-perm__label { font-size: var(--nv-fs-14); }
+.nv-perm__hint { font-size: var(--nv-fs-12); color: var(--nv-text-3); }
+.nv-tristate { display: inline-flex; flex: none; padding: 2px; gap: 2px; border-radius: var(--nv-r-control); background: var(--nv-bg-3); }
+.nv-tristate button { width: 36px; height: 32px; display: grid; place-items: center; border-radius: 6px; color: var(--nv-text-3); font-weight: 700; }
+.nv-tristate button:hover { color: var(--nv-text-1); }
+.nv-tristate button[aria-checked="true"] { background: var(--nv-bg-2); color: var(--nv-text-1); box-shadow: 0 0 0 1px var(--nv-line-strong); }
+.nv-tristate button.is-deny[aria-checked="true"] { background: var(--nv-danger-soft); color: var(--nv-danger); box-shadow: 0 0 0 1px var(--nv-danger); }
+.nv-tristate button.is-allow[aria-checked="true"] { background: color-mix(in srgb, var(--nv-online) 16%, transparent); color: var(--nv-online); box-shadow: 0 0 0 1px var(--nv-online); }
+.nv-tristate button:focus-visible { outline: 2px solid var(--nv-accent-line); outline-offset: 1px; }
+@media (max-width: 720px) {
+    .nv-overrides { grid-template-columns: 1fr; }
+}
+
+/* Einmal sichtbares Geheimnis (Webhook-URL) */
+.nv-secret { display: grid; gap: var(--nv-s-2); padding: var(--nv-s-3); border-radius: var(--nv-r-control); background: var(--nv-bg-3); border: 1px solid var(--nv-line-strong); }
+.nv-secret .nv-row .nv-input { flex: 1; font-family: var(--nv-mono); font-size: var(--nv-fs-12); }
+.nv-code { display: block; font-family: var(--nv-mono); font-size: var(--nv-fs-12); color: var(--nv-text-2); overflow-x: auto; white-space: nowrap; }
+
 /* Bildansicht */
 .nv-viewer { padding: var(--nv-s-4); }
 .nv-viewer__frame { display: grid; gap: var(--nv-s-3); justify-items: center; max-width: 100%; animation: nv-pop var(--nv-base) var(--nv-ease); }

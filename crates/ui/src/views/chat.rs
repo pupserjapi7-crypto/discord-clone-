@@ -258,7 +258,8 @@ fn MessageList(channel: Channel, in_thread: bool) -> Element {
                     mention: me_handle.as_ref().is_some_and(|handle| message.content.contains(handle.as_str())),
                     can_manage,
                     can_thread,
-                    thread: threads.iter().find(|t| t.root_message_id.as_deref() == Some(message.id.as_str())).cloned(),
+                    // Forum-Beiträge: die Startnachricht liegt im Thread selbst – kein Verweis auf sich.
+                    thread: threads.iter().find(|t| t.root_message_id.as_deref() == Some(message.id.as_str()) && t.id != message.channel_id).cloned(),
                 }
                 }
             }

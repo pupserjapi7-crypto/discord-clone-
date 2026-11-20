@@ -178,6 +178,11 @@ pub(crate) async fn create_message(
             "voice channels have no messages".into(),
         ));
     }
+    if channel.kind == nova_db::models::CHANNEL_FORUM {
+        return Err(ApiError::BadRequest(
+            "forum channels only contain posts".into(),
+        ));
+    }
     if !perms.contains(Permissions::SEND_MESSAGES) {
         return Err(ApiError::Forbidden);
     }

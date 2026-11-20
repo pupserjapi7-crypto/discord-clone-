@@ -157,6 +157,8 @@ impl Session {
 struct ChannelInfo {
     slowmode_secs: i32,
     archived: bool,
+    /// Forum: keine Nachrichten direkt, nur Beiträge.
+    forum: bool,
     fetched: Instant,
 }
 
@@ -313,6 +315,12 @@ impl Gateway {
         if info.archived {
             return Err(("archived", "thread is archived".to_owned()));
         }
+        if info.forum {
+            return Err((
+                "bad_request",
+                "forum channels only contain posts".to_owned(),
+            ));
+        }
         if perms.intersects(Permissions::MANAGE_MESSAGES | Permissions::MANAGE_CHANNELS) {
             return Ok(());
         }
@@ -330,6 +338,7 @@ impl Gateway {
         let info = ChannelInfo {
             slowmode_secs: channel.slowmode_secs,
             archived: channel.kind == CHANNEL_THREAD && channel.archived,
+            forum: channel.kind == nova_db::models::CHANNEL_FORUM,
             fetched: Instant::now(),
         };
         self.channel_info.insert(channel_id, info);

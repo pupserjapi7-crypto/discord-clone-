@@ -102,6 +102,8 @@ pub enum Overlay {
     Confirm(ConfirmAction),
     /// Bild in voller Größe.
     Image(Attachment),
+    /// Neuer Beitrag in einem Forum.
+    NewPost(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

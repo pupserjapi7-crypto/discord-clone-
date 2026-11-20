@@ -233,7 +233,7 @@ fn ChannelSidebar() -> Element {
     let text: Vec<Channel> = detail
         .channels
         .iter()
-        .filter(|c| c.kind == KIND_TEXT)
+        .filter(|c| c.kind == KIND_TEXT || c.kind == KIND_FORUM)
         .cloned()
         .collect();
     let voice: Vec<Channel> = detail
@@ -309,7 +309,13 @@ fn ChannelSidebar() -> Element {
                                 let active = current.as_deref() == Some(channel.id.as_str());
                                 let unread = !active && is_unread(&channel.id);
                                 let id = channel.id.clone();
-                                let child_threads: Vec<Channel> = threads.iter().filter(|t| t.parent_id.as_deref() == Some(channel.id.as_str())).cloned().collect();
+                                // Forum-Beiträge stehen im Forum selbst, nicht in der Leiste.
+                                let child_threads: Vec<Channel> = if channel.kind == KIND_FORUM {
+                                    Vec::new()
+                                } else {
+                                    threads.iter().filter(|t| t.parent_id.as_deref() == Some(channel.id.as_str())).cloned().collect()
+                                };
+                                let icon = if channel.kind == KIND_FORUM { "forum" } else { "hash" };
                                 rsx! {
                                     button {
                                         key: "{channel.id}",
@@ -319,7 +325,7 @@ fn ChannelSidebar() -> Element {
                                             let id = id.clone();
                                             spawn(actions::open_channel(store, id));
                                         },
-                                        Icon { name: "hash", size: 18 }
+                                        Icon { name: icon, size: 18 }
                                         span { class: "nv-channel__name", "{channel.name}" }
                                         if unread {
                                             span { class: "nv-channel__dot", role: "img", "aria-label": "Ungelesen" }
@@ -537,6 +543,10 @@ fn MainArea() -> Element {
                 Header { channel: Some(channel.clone()) }
                 voice_view::VoiceStage { channel }
             },
+            Some(channel) if channel.kind == KIND_FORUM => rsx! {
+                Header { channel: Some(channel.clone()) }
+                super::forum::ForumView { channel }
+            },
             Some(channel) => rsx! {
                 Header { channel: Some(channel.clone()) }
                 chat::ChatPane { channel_id: channel.id.clone(), in_thread: false }
@@ -576,7 +586,7 @@ fn Header(channel: Option<Channel>) -> Element {
     let pins_open = store.pins.read().is_some();
     let is_text = channel
         .as_ref()
-        .map(|c| c.kind != KIND_VOICE)
+        .map(|c| c.kind == KIND_TEXT || c.kind == KIND_THREAD)
         .unwrap_or(false);
     rsx! {
         header { class: "nv-header",
@@ -588,7 +598,7 @@ fn Header(channel: Option<Channel>) -> Element {
             }
             if let Some(channel) = &channel {
                 span { class: "nv-header__icon",
-                    Icon { name: if channel.kind == KIND_VOICE { "volume" } else { "hash" }, size: 20 }
+                    Icon { name: match channel.kind { KIND_VOICE => "volume", KIND_FORUM => "forum", _ => "hash" }, size: 20 }
                 }
                 h2 { class: "nv-header__title", "{channel.name}" }
                 if channel.slowmode_secs > 0 {

@@ -3064,7 +3064,13 @@ impl App {
                     ));
                 }
                 channels = channels.push(head);
-                for channel in detail.channels.iter().filter(|c| c.kind == kind) {
+                // Foren (kind 3) stehen bei den Textkanälen; ihre Beiträge
+                // sind Threads und erscheinen darunter.
+                for channel in detail
+                    .channels
+                    .iter()
+                    .filter(|c| c.kind == kind || (kind == 0 && c.kind == 3))
+                {
                     channels = channels.push(self.channel_entry(channel, 0.0));
                     // Aktive Threads direkt unter ihrem Kanal.
                     for thread in detail
@@ -3912,6 +3918,15 @@ impl App {
         };
         if is_voice {
             return column![header, self.view_voice(channel)].into();
+        }
+        if channel.kind == 3 {
+            let body = empty_state(
+                Icon::Message,
+                format!("Forum #{}", channel.name),
+                "Jeder Beitrag ist ein eigener Thread – du findest sie links unter dem Forum. \
+                 Neue Beiträge startest du bisher in der Web-App.",
+            );
+            return column![header, body].into();
         }
 
         let list = self.view_history(

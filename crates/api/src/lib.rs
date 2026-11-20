@@ -5,6 +5,7 @@ mod bots;
 mod channels;
 mod dms;
 pub mod error;
+mod forums;
 mod guard;
 mod media;
 mod moderation;
@@ -124,8 +125,29 @@ pub fn router(state: AppState) -> Router {
             axum::routing::patch(channels::update_channel).delete(channels::delete_channel),
         )
         .route(
+            "/api/v1/channels/{channel_id}/overrides",
+            get(moderation::list_overrides),
+        )
+        .route(
             "/api/v1/channels/{channel_id}/overrides/{kind}/{target_id}",
             put(moderation::set_override).delete(moderation::delete_override),
+        )
+        // Foren und Webhooks
+        .route(
+            "/api/v1/channels/{channel_id}/posts",
+            get(forums::list_posts).post(forums::create_post),
+        )
+        .route(
+            "/api/v1/channels/{channel_id}/webhooks",
+            get(forums::list_webhooks).post(forums::create_webhook),
+        )
+        .route(
+            "/api/v1/webhooks/{webhook_id}",
+            delete(forums::delete_webhook),
+        )
+        .route(
+            "/api/v1/webhooks/{webhook_id}/{token}",
+            post(forums::execute_webhook),
         )
         .route(
             "/api/v1/channels/{channel_id}/messages",
@@ -320,14 +342,14 @@ fn verify_password(password: &str, encoded: &str) -> bool {
     }
 }
 
-fn sha256(data: &[u8]) -> [u8; 32] {
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
     let digest = Sha256::digest(data);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest);
     out
 }
 
-fn random_hex(bytes: usize) -> String {
+pub(crate) fn random_hex(bytes: usize) -> String {
     let mut buf = vec![0u8; bytes];
     OsRng.fill_bytes(&mut buf);
     hex::encode(buf)
@@ -737,9 +759,9 @@ async fn create_channel(
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     validate::validate_channel_name(&req.name)
         .map_err(|msg| ApiError::BadRequest(msg.to_owned()))?;
-    if req.kind != 0 && req.kind != 1 {
+    if !matches!(req.kind, 0 | 1 | 3) {
         return Err(ApiError::BadRequest(
-            "kind must be 0 (text) or 1 (voice)".into(),
+            "kind must be 0 (text), 1 (voice) or 3 (forum)".into(),
         ));
     }
     if !state.db.is_member(guild_id, auth.user_id).await? {

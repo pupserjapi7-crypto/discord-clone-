@@ -33,6 +33,8 @@ pub struct Guild {
 pub const KIND_TEXT: i16 = 0;
 pub const KIND_VOICE: i16 = 1;
 pub const KIND_THREAD: i16 = 2;
+/// Forum: nur Beiträge (Threads), keine Nachrichten direkt im Kanal.
+pub const KIND_FORUM: i16 = 3;
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct Channel {
@@ -145,14 +147,17 @@ pub mod perm {
     pub const KICK_MEMBERS: u64 = 1 << 4;
     pub const BAN_MEMBERS: u64 = 1 << 5;
     pub const TIMEOUT_MEMBERS: u64 = 1 << 6;
+    pub const VIEW_CHANNEL: u64 = 1 << 7;
     pub const SEND_MESSAGES: u64 = 1 << 8;
     pub const MANAGE_MESSAGES: u64 = 1 << 9;
     pub const ADD_REACTIONS: u64 = 1 << 10;
     pub const ATTACH_FILES: u64 = 1 << 11;
+    pub const READ_MESSAGE_HISTORY: u64 = 1 << 12;
     pub const CONNECT: u64 = 1 << 13;
     pub const SPEAK: u64 = 1 << 14;
     pub const STREAM: u64 = 1 << 15;
     pub const CREATE_INVITE: u64 = 1 << 19;
+    pub const MANAGE_WEBHOOKS: u64 = 1 << 20;
     pub const CREATE_THREADS: u64 = 1 << 23;
     pub const MANAGE_THREADS: u64 = 1 << 24;
 
@@ -195,6 +200,11 @@ pub mod perm {
             "Threads verwalten",
             "Archivieren und löschen",
         ),
+        (
+            MANAGE_WEBHOOKS,
+            "Webhooks verwalten",
+            "Webhooks für Kanäle anlegen und löschen",
+        ),
         (SEND_MESSAGES, "Nachrichten senden", ""),
         (
             ATTACH_FILES,
@@ -208,6 +218,119 @@ pub mod perm {
         (STREAM, "Video senden", "Bildschirm teilen und Kamera"),
         (CREATE_INVITE, "Einladungen erstellen", ""),
     ];
+}
+
+/// Rechte, die sich pro Kanal überschreiben lassen: Bit, Name, Erklärung.
+/// Text und Forum bzw. Sprache.
+pub const TEXT_OVERRIDES: &[(u64, &str, &str)] = &[
+    (
+        perm::VIEW_CHANNEL,
+        "Kanal sehen",
+        "Ohne dieses Recht ist der Kanal unsichtbar",
+    ),
+    (
+        perm::SEND_MESSAGES,
+        "Schreiben",
+        "Nachrichten bzw. Forum-Beiträge",
+    ),
+    (perm::READ_MESSAGE_HISTORY, "Verlauf lesen", ""),
+    (perm::ADD_REACTIONS, "Reagieren", ""),
+    (perm::ATTACH_FILES, "Dateien anhängen", ""),
+    (perm::CREATE_THREADS, "Threads starten", ""),
+    (
+        perm::MANAGE_MESSAGES,
+        "Nachrichten verwalten",
+        "Löschen, anpinnen, Slowmode umgehen",
+    ),
+    (perm::MANAGE_THREADS, "Threads verwalten", ""),
+];
+
+pub const VOICE_OVERRIDES: &[(u64, &str, &str)] = &[
+    (
+        perm::VIEW_CHANNEL,
+        "Kanal sehen",
+        "Ohne dieses Recht ist der Kanal unsichtbar",
+    ),
+    (perm::CONNECT, "Beitreten", ""),
+    (perm::SPEAK, "Sprechen", ""),
+    (perm::STREAM, "Video senden", "Bildschirm teilen und Kamera"),
+];
+
+/// Kanal-Override für eine Rolle oder ein Mitglied.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct ChannelOverride {
+    /// `role` oder `member`
+    pub kind: String,
+    pub target_id: String,
+    #[serde(default)]
+    pub allow: u64,
+    #[serde(default)]
+    pub deny: u64,
+}
+
+/// Zustand eines Rechts in einem Override.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverrideState {
+    Deny,
+    Inherit,
+    Allow,
+}
+
+impl ChannelOverride {
+    pub fn state(&self, bit: u64) -> OverrideState {
+        if self.deny & bit != 0 {
+            OverrideState::Deny
+        } else if self.allow & bit != 0 {
+            OverrideState::Allow
+        } else {
+            OverrideState::Inherit
+        }
+    }
+
+    pub fn set(&mut self, bit: u64, state: OverrideState) {
+        self.allow &= !bit;
+        self.deny &= !bit;
+        match state {
+            OverrideState::Allow => self.allow |= bit,
+            OverrideState::Deny => self.deny |= bit,
+            OverrideState::Inherit => {}
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct Webhook {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub channel_id: String,
+    #[serde(default)]
+    pub created_at: String,
+    /// Nur direkt nach dem Anlegen.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// Beitrag in einem Forum.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct ForumPost {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub author_name: Option<String>,
+    #[serde(default)]
+    pub preview: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub replies: i64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct PostCreated {
+    pub thread: Channel,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]

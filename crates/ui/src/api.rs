@@ -306,6 +306,68 @@ pub async fn discard_attachment(id: &str) -> Result<(), String> {
     send_empty("DELETE", &format!("/api/v1/attachments/{id}"), None).await
 }
 
+// --------------------------------------------- Overrides, Foren, Webhooks
+
+pub async fn overrides(channel: &str) -> Result<Vec<ChannelOverride>, String> {
+    send(
+        "GET",
+        &format!("/api/v1/channels/{channel}/overrides"),
+        None,
+    )
+    .await
+}
+
+pub async fn set_override(channel: &str, entry: &ChannelOverride) -> Result<(), String> {
+    send_empty(
+        "PUT",
+        &format!(
+            "/api/v1/channels/{channel}/overrides/{}/{}",
+            entry.kind, entry.target_id
+        ),
+        Some(json!({ "allow": entry.allow, "deny": entry.deny })),
+    )
+    .await
+}
+
+pub async fn delete_override(channel: &str, kind: &str, target: &str) -> Result<(), String> {
+    send_empty(
+        "DELETE",
+        &format!("/api/v1/channels/{channel}/overrides/{kind}/{target}"),
+        None,
+    )
+    .await
+}
+
+pub async fn forum_posts(forum: &str) -> Result<Vec<ForumPost>, String> {
+    send("GET", &format!("/api/v1/channels/{forum}/posts"), None).await
+}
+
+pub async fn create_post(forum: &str, title: &str, content: &str) -> Result<PostCreated, String> {
+    send(
+        "POST",
+        &format!("/api/v1/channels/{forum}/posts"),
+        Some(json!({ "title": title, "content": content })),
+    )
+    .await
+}
+
+pub async fn webhooks(channel: &str) -> Result<Vec<Webhook>, String> {
+    send("GET", &format!("/api/v1/channels/{channel}/webhooks"), None).await
+}
+
+pub async fn create_webhook(channel: &str, name: &str) -> Result<Webhook, String> {
+    send(
+        "POST",
+        &format!("/api/v1/channels/{channel}/webhooks"),
+        Some(json!({ "name": name })),
+    )
+    .await
+}
+
+pub async fn delete_webhook(id: &str) -> Result<(), String> {
+    send_empty("DELETE", &format!("/api/v1/webhooks/{id}"), None).await
+}
+
 // -------------------------------------------------------------- Moderation
 
 pub async fn kick(guild: &str, user: &str, reason: &str) -> Result<(), String> {

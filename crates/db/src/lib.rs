@@ -4,6 +4,7 @@
 
 pub mod attachments;
 pub mod dms;
+pub mod forums;
 pub mod models;
 pub mod repo;
 pub mod views;

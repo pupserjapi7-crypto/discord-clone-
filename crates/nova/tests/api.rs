@@ -1430,3 +1430,184 @@ fn encode_query(text: &str) -> String {
         })
         .collect()
 }
+
+#[tokio::test]
+async fn forums_webhooks_and_channel_overrides() {
+    let url = db_or_skip!();
+    let base = spawn_server(&url).await;
+    let owner = Client::register(&base, "fro").await;
+    let member = Client::register(&base, "frm").await;
+    let (guild_id, text_channel) = owner.guild().await;
+    owner.invite_and_join(&member, &guild_id).await;
+
+    // Forum anlegen (kind 3); direkt schreiben geht dort nicht.
+    let (status, forum) = owner
+        .post(
+            &format!("/api/v1/guilds/{guild_id}/channels"),
+            json!({ "name": "fragen", "kind": 3 }),
+        )
+        .await;
+    assert_eq!(status, 201, "{forum}");
+    let forum_id = forum["id"].as_str().unwrap().to_owned();
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{forum_id}/messages"),
+            json!({ "content": "direkt" }),
+        )
+        .await;
+    assert_eq!(status, 400);
+
+    // Beitrag mit Anhang, Antwort im Thread, Übersicht
+    let (status, file) = member
+        .upload(
+            &format!("/api/v1/channels/{forum_id}/attachments"),
+            "log.txt",
+            b"Fehlermeldung".to_vec(),
+        )
+        .await;
+    assert_eq!(status, 201, "{file}");
+    let (status, post) = member
+        .post(
+            &format!("/api/v1/channels/{forum_id}/posts"),
+            json!({ "title": "Spiel startet nicht", "content": "Was tun?", "attachment_ids": [file["id"]] }),
+        )
+        .await;
+    assert_eq!(status, 201, "{post}");
+    let thread_id = post["thread"]["id"].as_str().unwrap().to_owned();
+    assert_eq!(post["thread"]["parent_id"], forum_id.as_str());
+    assert_eq!(post["thread"]["kind"], 2);
+    assert_eq!(post["message"]["attachments"][0]["filename"], "log.txt");
+    assert_eq!(
+        owner
+            .fetch(
+                &format!("/api/v1/attachments/{}", file["id"].as_str().unwrap()),
+                &[]
+            )
+            .await
+            .status()
+            .as_u16(),
+        200
+    );
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{thread_id}/messages"),
+            json!({ "content": "Treiber aktualisieren." }),
+        )
+        .await;
+    assert_eq!(status, 201);
+    let (status, posts) = member
+        .get(&format!("/api/v1/channels/{forum_id}/posts"))
+        .await;
+    assert_eq!(status, 200, "{posts}");
+    assert_eq!(posts[0]["title"], "Spiel startet nicht");
+    assert_eq!(posts[0]["replies"], 1);
+    assert_eq!(posts[0]["preview"], "Was tun?");
+    let (status, _) = member
+        .get(&format!("/api/v1/channels/{text_channel}/posts"))
+        .await;
+    assert_eq!(status, 400, "Textkanal ist kein Forum");
+
+    // Overrides lesen: nur mit MANAGE_ROLES + MANAGE_CHANNELS
+    let (status, _) = owner
+        .put(
+            &format!("/api/v1/channels/{forum_id}/overrides/member/{}", member.id),
+            json!({ "allow": 0, "deny": 1u64 << 8 }),
+        )
+        .await;
+    assert_eq!(status, 204);
+    let (status, overrides) = owner
+        .get(&format!("/api/v1/channels/{forum_id}/overrides"))
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(overrides[0]["kind"], "member");
+    assert_eq!(overrides[0]["target_id"], member.id.as_str());
+    assert_eq!(overrides[0]["deny"], 1u64 << 8);
+    assert_eq!(
+        member
+            .get(&format!("/api/v1/channels/{forum_id}/overrides"))
+            .await
+            .0,
+        403
+    );
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{forum_id}/posts"),
+            json!({ "title": "Noch was", "content": "x" }),
+        )
+        .await;
+    assert_eq!(status, 403, "SEND_MESSAGES im Forum verweigert");
+
+    // Webhooks
+    let (status, _) = member
+        .post(
+            &format!("/api/v1/channels/{text_channel}/webhooks"),
+            json!({ "name": "CI" }),
+        )
+        .await;
+    assert_eq!(status, 403, "ohne MANAGE_WEBHOOKS");
+    let (status, _) = owner
+        .post(
+            &format!("/api/v1/channels/{forum_id}/webhooks"),
+            json!({ "name": "CI" }),
+        )
+        .await;
+    assert_eq!(status, 400, "nur Textkanäle");
+    let (status, hook) = owner
+        .post(
+            &format!("/api/v1/channels/{text_channel}/webhooks"),
+            json!({ "name": "Build-Bot" }),
+        )
+        .await;
+    assert_eq!(status, 201, "{hook}");
+    let hook_id = hook["id"].as_str().unwrap().to_owned();
+    let token = hook["token"].as_str().unwrap().to_owned();
+    assert!(
+        hook["url"]
+            .as_str()
+            .unwrap()
+            .ends_with(&format!("/api/v1/webhooks/{hook_id}/{token}"))
+    );
+    let (_, list) = owner
+        .get(&format!("/api/v1/channels/{text_channel}/webhooks"))
+        .await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    assert!(list[0].get("token").is_none(), "Token nur einmal");
+
+    let http = reqwest::Client::new();
+    let wrong = http
+        .post(format!(
+            "{base}/api/v1/webhooks/{hook_id}/{}",
+            "0".repeat(64)
+        ))
+        .json(&json!({ "content": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status().as_u16(), 404);
+    let ok = http
+        .post(format!("{base}/api/v1/webhooks/{hook_id}/{token}"))
+        .json(&json!({ "content": "Build #42 grün" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status().as_u16(), 201);
+    let (_, history) = member
+        .get(&format!("/api/v1/channels/{text_channel}/messages"))
+        .await;
+    let last = history.as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["content"], "Build #42 grün");
+    assert_eq!(last["author"]["display_name"], "Build-Bot");
+    assert_eq!(last["author"]["bot"], true);
+
+    assert_eq!(
+        owner.delete(&format!("/api/v1/webhooks/{hook_id}")).await.0,
+        204
+    );
+    let gone = http
+        .post(format!("{base}/api/v1/webhooks/{hook_id}/{token}"))
+        .json(&json!({ "content": "x" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status().as_u16(), 404);
+}

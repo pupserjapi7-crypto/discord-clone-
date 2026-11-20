@@ -30,6 +30,7 @@ pub fn OverlayHost() -> Element {
         Overlay::Member(user_id) => rsx! { MemberCard { user_id } },
         Overlay::Confirm(action) => rsx! { Confirm { action } },
         Overlay::Image(attachment) => rsx! { ImageViewer { attachment } },
+        Overlay::NewPost(forum_id) => rsx! { NewPost { forum_id } },
     }
 }
 
@@ -199,11 +200,15 @@ fn CreateChannel(kind: i16) -> Element {
                 },
                 div { class: "nv-segment", role: "group", "aria-label": "Kanaltyp",
                     button { r#type: "button", "aria-pressed": if chosen() == KIND_TEXT { "true" } else { "false" }, onclick: move |_| chosen.set(KIND_TEXT), "# Text" }
+                    button { r#type: "button", "aria-pressed": if chosen() == KIND_FORUM { "true" } else { "false" }, onclick: move |_| chosen.set(KIND_FORUM), "Forum" }
                     button { r#type: "button", "aria-pressed": if chosen() == KIND_VOICE { "true" } else { "false" }, onclick: move |_| chosen.set(KIND_VOICE), "Sprache" }
+                }
+                if chosen() == KIND_FORUM {
+                    p { class: "nv-muted", "Im Forum beginnt jeder Beitrag einen eigenen Thread – gut für Fragen, Ideen und Hilfe." }
                 }
                 div { class: "nv-field",
                     label { class: "nv-field__label", r#for: "channel-name", "Name" }
-                    input { id: "channel-name", class: "nv-input", maxlength: "48", placeholder: if chosen() == KIND_TEXT { "z. B. ankündigungen" } else { "z. B. lounge" }, value: "{name}", oninput: move |e| name.set(e.value()) }
+                    input { id: "channel-name", class: "nv-input", maxlength: "48", placeholder: match chosen() { KIND_VOICE => "z. B. lounge", KIND_FORUM => "z. B. fragen", _ => "z. B. ankündigungen" }, value: "{name}", oninput: move |e| name.set(e.value()) }
                     span { class: "nv-field__hint", "Kleinbuchstaben, Leerzeichen werden zu Bindestrichen." }
                     if let Some(text) = error() {
                         p { class: "nv-field__error", role: "alert", Icon { name: "alert", size: 16 } "{text}" }
@@ -849,6 +854,74 @@ fn ImageViewer(attachment: Attachment) -> Element {
                         "Herunterladen"
                     }
                     button { class: "nv-btn", r#type: "button", onclick: move |_| store.close_overlay(), "Schließen" }
+                }
+            }
+        }
+    }
+}
+
+/// Neuer Forum-Beitrag: Titel und erste Nachricht; danach ist der Beitrag
+/// rechts als Thread offen.
+#[component]
+fn NewPost(forum_id: String) -> Element {
+    let store = use_store();
+    let mut title = use_signal(String::new);
+    let mut content = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| Option::<String>::None);
+    let forum_name = store
+        .detail
+        .read()
+        .as_ref()
+        .and_then(|detail| detail.channel(&forum_id).map(|c| c.name.clone()))
+        .unwrap_or_default();
+    rsx! {
+        Modal {
+            id: "dlg-post",
+            title: "Neuer Beitrag",
+            description: "in {forum_name}",
+            onclose: move |_| store.close_overlay(),
+            form {
+                class: "nv-form",
+                onsubmit: move |event| {
+                    event.prevent_default();
+                    let heading = title.read().trim().to_owned();
+                    let text = content.read().trim().to_owned();
+                    if heading.is_empty() || text.is_empty() {
+                        error.set(Some("Titel und Text brauchen beide etwas Inhalt.".into()));
+                        return;
+                    }
+                    let forum = forum_id.clone();
+                    busy.set(true);
+                    spawn_forever(async move {
+                        match api::create_post(&forum, &heading, &text).await {
+                            Ok(created) => {
+                                store.close_overlay();
+                                actions::refresh_guild(store).await;
+                                actions::open_thread(store, created.thread.id).await;
+                            }
+                            Err(err) => {
+                                busy.set(false);
+                                error.set(Some(err));
+                            }
+                        }
+                    });
+                },
+                div { class: "nv-field",
+                    label { class: "nv-field__label", r#for: "post-title", "Titel" }
+                    input { id: "post-title", class: "nv-input", maxlength: "64", placeholder: "Worum geht es?", value: "{title}", oninput: move |e| title.set(e.value()) }
+                }
+                div { class: "nv-field",
+                    label { class: "nv-field__label", r#for: "post-text", "Beitrag" }
+                    textarea { id: "post-text", class: "nv-input nv-textarea", rows: "6", maxlength: "8000", value: "{content}", oninput: move |e| content.set(e.value()) }
+                    span { class: "nv-field__hint", "Bilder und Dateien kannst du danach im Thread anhängen." }
+                    if let Some(text) = error() {
+                        p { class: "nv-field__error", role: "alert", Icon { name: "alert", size: 16 } "{text}" }
+                    }
+                }
+                div { class: "nv-modal__actions",
+                    button { r#type: "button", class: "nv-btn nv-btn--ghost", onclick: move |_| store.close_overlay(), "Abbrechen" }
+                    button { r#type: "submit", class: classes(&["nv-btn", "nv-btn--primary", if busy() { "is-loading" } else { "" }]), disabled: busy(), "Veröffentlichen" }
                 }
             }
         }

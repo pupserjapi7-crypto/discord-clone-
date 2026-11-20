@@ -57,10 +57,40 @@ bei Menschen: Rollen, Kanal-Overrides, Timeouts.
 | `DELETE` | `/api/v1/attachments/{id}` | eigener, noch nicht gesendeter Upload |
 | `DELETE` | `/api/v1/channels/{id}/messages/{msg}` | eigene oder `MANAGE_MESSAGES` |
 | `PUT`/`DELETE` | `/api/v1/channels/{id}/pins/{msg}` | `MANAGE_MESSAGES` |
+| `GET` | `/api/v1/channels/{id}/overrides` | `MANAGE_ROLES` + `MANAGE_CHANNELS` |
+| `PUT`/`DELETE` | `/api/v1/channels/{id}/overrides/{role\|member}/{target}` `{allow, deny}` | `MANAGE_ROLES` + `MANAGE_CHANNELS` |
+| `GET` | `/api/v1/channels/{forum}/posts` | `READ_MESSAGE_HISTORY` |
+| `POST` | `/api/v1/channels/{forum}/posts` `{title, content, attachment_ids?}` | `SEND_MESSAGES` |
+| `GET`/`POST` | `/api/v1/channels/{id}/webhooks` `{name}` | `MANAGE_WEBHOOKS` (Anlegen nur Menschen) |
+| `DELETE` | `/api/v1/webhooks/{id}` | `MANAGE_WEBHOOKS` |
 | `POST` | `/api/v1/channels/{id}/messages/{msg}/threads` `{name}` | `CREATE_THREADS` |
 | `POST` | `/api/v1/guilds/{id}/members/{user}/kick` | `KICK_MEMBERS` + Hierarchie |
 | `PUT` | `/api/v1/guilds/{id}/members/{user}/timeout` `{seconds}` | `TIMEOUT_MEMBERS` + Hierarchie |
 | `PUT`/`DELETE` | `/api/v1/guilds/{id}/bans/{user}` | `BAN_MEMBERS` + Hierarchie |
+
+### Foren (ab 0.8)
+
+Ein Forum ist ein Kanal mit `kind = 3`. Er hat keine eigenen Nachrichten
+(`POST …/messages` liefert `400`); jeder Beitrag ist ein Thread (`kind = 2`,
+`parent_id` = Forum) mit seiner ersten Nachricht. Antworten gehen wie in jedem
+Thread an `POST /api/v1/channels/{thread}/messages`. Anhänge für den ersten
+Beitrag lädt man in das Forum hoch und nennt sie in `attachment_ids`.
+
+### Webhooks (ab 0.8)
+
+Externe Dienste posten ohne Konto in einen Textkanal:
+
+```bash
+curl -X POST "https://<server>/api/v1/webhooks/<id>/<token>" \
+  -H "Content-Type: application/json" -d '{"content":"Build #42 ist grün"}'
+```
+
+Die URL gibt es nur einmal beim Anlegen (in der Web-App unter
+Server-Einstellungen → Kanäle → Bearbeiten); gespeichert ist nur der
+SHA-256 des Tokens. Absender ist ein eigenes Bot-Konto mit dem Namen des
+Webhooks. 30 Nachrichten Burst, danach eine alle zwei Sekunden (`429`).
+Falsche ID oder falsches Token: `404`. Achtung: Reverse-Proxys protokollieren
+URLs – das Token steht im Pfad.
 
 ### Anhänge (ab 0.8)
 
