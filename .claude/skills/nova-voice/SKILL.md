@@ -18,7 +18,7 @@ description: Arbeit am Voice- und Screenshare-Pfad von Project Nova – str0m-SF
   `Propagated::MediaData` → `handle_media_data_out` für jeden anderen Client.
 - **Stream-IDs**: ausgehende Spuren tragen als Stream-ID `u{user_id}`. Der Client
   ordnet darüber Audio-/Video-Elemente Personen zu (Lautstärke, Sprecher-Ring).
-- **Limits**: `NOVA_SFU_MAX_USERS` pro Raum; höchstens 8 gleichzeitige
+- **Limits**: `NOVA_VOICE_MAX_USERS` pro Raum (Standard 15); höchstens 8 gleichzeitige
   Videospuren (Screenshare) pro Raum (`MAX_VIDEO_TRACKS`).
 - **Codecs**: `rtc_config()` im SFU erlaubt nur Opus und H.264 Constrained
   Baseline (PT 108, `42e01f`, `packetization-mode=1`). Der native Client nutzt
@@ -75,12 +75,21 @@ description: Arbeit am Voice- und Screenshare-Pfad von Project Nova – str0m-SF
 
 ## Latenz messen
 
-1. SFU-Weiterleitung: Zeit zwischen `Input::Receive` und `writer.write` loggen
-   (`debug`) bzw. Metrik `sfu_forward_us`. Budget < 5 ms pro Paket.
-2. Ende-zu-Ende: zwei Clients, Click-Track im Sender, Aufnahme beim Empfänger,
+1. SFU-Weiterleitung: Metrik `nova_sfu_forward_*` in `/metrics` (nur lokal:
+   `curl http://127.0.0.1:8080/metrics`), gemessen von `network_time` des
+   Pakets bis `writer.write`. Budget < 5 ms pro Paket. Last dazu:
+   `nova seed --users 30` und `nova-loadtest --mode voice --users 30 --guild
+   <id> --server-pid <pid>` (echte str0m-Verbindungen, Laufzeit durch den SFU,
+   Verlust, CPU/RAM). **Nur Release-Builds messen** – im Debug-Build schafft
+   der SFU keine 30 Personen. Für mehr als 15 Personen pro Raum
+   `NOVA_VOICE_MAX_USERS` setzen.
+2. Der Raum-Thread muss im Leerlauf schlafen: `top -H -p <pid>` zeigt
+   `sfu-<kanal>` bei ~0 %. (Bis 0.8 lief er wegen eines nicht blockierenden
+   Sockets dauerhaft auf 100 %.)
+3. Ende-zu-Ende: zwei Clients, Click-Track im Sender, Aufnahme beim Empfänger,
    Kreuzkorrelation. Budget < 100 ms. Ergebnis mit Datum in
    `docs/03-roadmap.md` eintragen – nie schätzen.
-3. Was in der Automation nicht geht (echtes Mikrofon, `getDisplayMedia`), in
+4. Was in der Automation nicht geht (echtes Mikrofon, `getDisplayMedia`), in
    `STATUS.md` als „nicht gemessen“ führen.
 
 ## Checkliste

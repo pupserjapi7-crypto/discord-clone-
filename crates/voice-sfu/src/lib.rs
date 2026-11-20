@@ -20,7 +20,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nova_common::protocol::UserPublic;
+use nova_common::{
+    metrics::{Histogram, HistogramSnapshot},
+    protocol::UserPublic,
+};
 use serde::Serialize;
 use str0m::{
     Candidate, Event, IceConnectionState, Input, Output, Rtc,
@@ -226,6 +229,8 @@ pub struct SfuEvent {
 struct Notifier {
     channel_id: i64,
     tx: Sender<SfuEvent>,
+    /// Weiterleitungszeit pro Paket (Empfang → an str0m übergeben), alle Räume.
+    forward: Arc<Histogram>,
 }
 
 impl Notifier {
@@ -290,6 +295,8 @@ struct Inner {
     rooms: Mutex<HashMap<i64, Arc<Room>>>,
     events_tx: Sender<SfuEvent>,
     events_rx: Mutex<Option<Receiver<SfuEvent>>>,
+    /// 16 Ki Messwerte (64 KB): Perzentile über die letzten Sekunden Betrieb.
+    forward: Arc<Histogram>,
 }
 
 impl Sfu {
@@ -311,8 +318,36 @@ impl Sfu {
                 rooms: Mutex::new(HashMap::new()),
                 events_tx,
                 events_rx: Mutex::new(Some(events_rx)),
+                forward: Arc::new(Histogram::new(16_384)),
             }),
         }
+    }
+
+    /// Weiterleitungszeit pro Paket: vom Empfang im Raum-Thread bis zur
+    /// Übergabe an die Verbindung des Empfängers (Budget < 5 ms).
+    pub fn forward_latency(&self) -> HistogramSnapshot {
+        self.inner.forward.snapshot()
+    }
+
+    /// Zeilen für `/metrics` (Prometheus-Text).
+    pub fn render_metrics(&self) -> String {
+        let forward = self.forward_latency();
+        let rooms = self
+            .inner
+            .rooms
+            .lock()
+            .map(|rooms| rooms.values().filter(|room| room.alive()).count())
+            .unwrap_or(0);
+        format!(
+            "# TYPE nova_sfu_rooms gauge\nnova_sfu_rooms {rooms}\n\
+             # TYPE nova_sfu_forward_seconds gauge\n\
+             nova_sfu_forward_p50_seconds {}\nnova_sfu_forward_p99_seconds {}\n\
+             nova_sfu_forward_max_seconds {}\nnova_sfu_forward_packets_total {}\n",
+            forward.p50 as f64 / 1e6,
+            forward.p99 as f64 / 1e6,
+            forward.max as f64 / 1e6,
+            forward.count
+        )
     }
 
     /// Ereignisse, die der SFU selbst bemerkt. Nur einmal abholbar.
@@ -422,6 +457,7 @@ impl Sfu {
         let notifier = Notifier {
             channel_id,
             tx: self.inner.events_tx.clone(),
+            forward: Arc::clone(&self.inner.forward),
         };
         let room = Room::new(
             channel_id,
@@ -627,15 +663,19 @@ fn run_room(
             }
         }
 
-        let connected_before: Vec<i64> = clients.iter().map(|client| client.user_id).collect();
-        clients.retain(|client| client.rtc.is_alive());
-        if let Ok(mut participants) = participants.lock() {
-            for user_id in connected_before {
-                if !clients.iter().any(|client| client.user_id == user_id)
-                    && participants.remove(&user_id).is_some()
-                {
-                    debug!(user_id, "SFU participant removed after disconnect");
-                    notifier.send(user_id, None);
+        // Nur aufräumen, wenn wirklich jemand weg ist (sonst kostete jeder
+        // Durchlauf eine Allokation, ein Lock und N² Vergleiche).
+        if clients.iter().any(|client| !client.rtc.is_alive()) {
+            let connected_before: Vec<i64> = clients.iter().map(|client| client.user_id).collect();
+            clients.retain(|client| client.rtc.is_alive());
+            if let Ok(mut participants) = participants.lock() {
+                for user_id in connected_before {
+                    if !clients.iter().any(|client| client.user_id == user_id)
+                        && participants.remove(&user_id).is_some()
+                    {
+                        debug!(user_id, "SFU participant removed after disconnect");
+                        notifier.send(user_id, None);
+                    }
                 }
             }
         }
@@ -654,27 +694,50 @@ fn run_room(
             timeout = timeout.min(next);
         }
 
-        if let Some(propagated) = to_propagate.pop_front() {
-            propagate(&propagated, &mut clients);
+        // Alles Angefallene in einem Zug weiterleiten (bis 0.8 kostete jedes
+        // einzelne Ereignis einen kompletten Durchlauf über alle Verbindungen).
+        if !to_propagate.is_empty() {
+            while let Some(propagated) = to_propagate.pop_front() {
+                propagate(&propagated, &mut clients);
+            }
             for client in clients.iter_mut() {
                 to_propagate.extend(client.take_keyframe_requests());
+            }
+            // str0m gibt frisch geschriebene Pakete erst nach einem Zeitschritt
+            // frei; ohne ihn warteten sie bis zum nächsten eingehenden Paket.
+            let now = Instant::now();
+            for client in &mut clients {
+                client.handle_input(Input::Timeout(now));
             }
             continue;
         }
 
-        let duration = (timeout - Instant::now()).max(Duration::from_millis(1));
-        socket.set_read_timeout(Some(duration)).ok();
-
-        socket.set_nonblocking(true).ok();
-        for _ in 0..256 {
-            let Some(input) = read_socket_input(&socket, local_addr, &mut buf) else {
-                break;
-            };
-            if let Some(client) = clients.iter_mut().find(|client| client.accepts(&input)) {
-                client.handle_input(input);
+        // Auf das erste Paket warten, höchstens bis zum nächsten str0m-Timeout
+        // (ist schon etwas fällig, gar nicht), dann ohne Warten nachlesen, was
+        // im Puffer liegt. Bis 0.8 war der Socket schon beim ersten Lesen nicht
+        // blockierend: der Raum-Thread drehte dauerhaft mit 100 % CPU.
+        let wait = timeout.saturating_duration_since(Instant::now());
+        let mut read = 0;
+        if !wait.is_zero() {
+            socket
+                .set_read_timeout(Some(wait.max(Duration::from_micros(100))))
+                .ok();
+            if let Some(input) = read_socket_input(&socket, local_addr, &mut buf) {
+                route_input(&mut clients, input);
+                read = 1;
             }
         }
-        socket.set_nonblocking(false).ok();
+        if read > 0 || wait.is_zero() {
+            socket.set_nonblocking(true).ok();
+            while read < READ_BATCH {
+                let Some(input) = read_socket_input(&socket, local_addr, &mut buf) else {
+                    break;
+                };
+                route_input(&mut clients, input);
+                read += 1;
+            }
+            socket.set_nonblocking(false).ok();
+        }
 
         let now = Instant::now();
         for client in &mut clients {
@@ -685,6 +748,19 @@ fn run_room(
     alive.store(false, Ordering::Relaxed);
     if let Ok(mut participants) = participants.lock() {
         participants.clear();
+    }
+}
+
+/// Höchstens so viele Pakete am Stück lesen, bevor die Verbindungen wieder
+/// abgefragt werden. Die DTLS-Schicht von str0m hält pro Verbindung nur 30
+/// unverarbeitete Datensätze; große SDP-Neuverhandlungen über den
+/// DataChannel kamen bei vielen Personen darüber (bis 0.8: 256 → Abbruch
+/// mit „receive queue full“).
+const READ_BATCH: usize = 24;
+
+fn route_input(clients: &mut [Client], input: Input) {
+    if let Some(client) = clients.iter_mut().find(|client| client.accepts(&input)) {
+        client.handle_input(input);
     }
 }
 
@@ -699,6 +775,9 @@ fn poll_until_timeout(
         }
         match client.poll_output(socket) {
             Propagated::Timeout(timeout) => return timeout,
+            // Gesendet o. Ä.: nichts weiterzuleiten. (Bis 0.8 landete auch das
+            // in der Warteschlange und kostete je einen ganzen Durchlauf.)
+            Propagated::Noop => {}
             propagated => queue.push_back(propagated),
         }
     }
@@ -1291,7 +1370,13 @@ impl Client {
             .is_err()
         {
             self.rtc.disconnect();
+            return;
         }
+        // Mindestens 1 µs: 0 heißt im Histogramm „leerer Platz“.
+        let micros = data.network_time.elapsed().as_micros().max(1);
+        self.notifier
+            .forward
+            .record_us(u64::try_from(micros).unwrap_or(u64::MAX));
     }
 
     /// Gesammelte Schlüsselbild-Wünsche als Weiterleitungen an die Absender.

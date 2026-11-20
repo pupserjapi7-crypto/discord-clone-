@@ -10,12 +10,15 @@ nova.example.com {
 	}
 
 	# Static assets embedded in the binary are served by the app itself.
+	# CSP und Permissions-Policy setzt `nova serve` selbst für die Seite
+	# (Kamera, Mikrofon und Bildschirm nur für die eigene Origin). Hier nicht
+	# noch einmal setzen: Caddy würde den Header der App ersetzen – bis 0.8
+	# stand hier `camera=()`, das hätte die Kamera im Sprachkanal gesperrt.
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy same-origin
-		Permissions-Policy "camera=(), microphone=(self), geolocation=()"
 	}
 }
 

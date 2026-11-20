@@ -31,6 +31,7 @@ NOVA_TRUST_PROXY=true
 NOVA_HASH_CONCURRENCY=1
 NOVA_LISTEN_BACKLOG=4096
 NOVA_UPLOAD_DIR=/var/lib/nova/uploads
+NOVA_SFU_PUBLIC_IP=85.215.175.202
 NOVA_AUTH_BURST=60
 NOVA_AUTH_RATE=10
 NOVA_MSG_RATE=10
@@ -39,7 +40,16 @@ NOVA_UPDATE_REPO=pupserjapi7-crypto/discord-clone-
 ```
 
 `NOVA_TRUST_PROXY=true` is required because Apache forwards `X-Forwarded-For`;
-rate limiting keys on the forwarded client IP.
+rate limiting keys on the forwarded client IP. Ab v0.8 zählt dabei der
+**letzte** Eintrag (den Apache anhängt), nicht mehr der erste, den der Client
+frei setzen kann.
+
+`NOVA_SFU_PUBLIC_IP` muss die öffentliche IP sein, sonst kündigt der SFU
+127.0.0.1 an und Sprache verbindet nie.
+
+`/metrics` antwortet ab v0.8 nur noch auf dem Server selbst
+(`curl -s http://127.0.0.1:8080/metrics`); über Apache kommt `404`. Neu dort:
+`nova_sfu_rooms` und `nova_sfu_forward_*` (Weiterleitungszeit pro Paket).
 
 ## Deploy / update
 

@@ -2,6 +2,42 @@
 
 Schätzungen sind **Personentage für eine erfahrene Rust-Entwicklerin/einen erfahrenen Rust-Entwickler** inklusive Tests und Doku. Jeder Meilenstein endet mit Code, Tests, Messung und kurzem Entscheidungsprotokoll. Kein Meilenstein beginnt, bevor der vorherige sein Gate bestanden hat.
 
+## Messwerte Voice v0.8.0 (20.11.2026, lokal, Linux-Container mit 4 Kernen, Release-Build)
+
+| Budget | Ziel | Gemessen |
+|---|---|---|
+| SFU-Weiterleitung pro Paket (Empfang → Übergabe an die Empfänger-Verbindung) | < 5 ms | **p50 0,19 ms, p99 0,67 ms** bei 30 Personen in einem Raum |
+| Laufzeit durch den SFU (Socket Sender → Socket Empfänger, Loopback) | – | 2 Personen p50 0,20 / p99 0,45 ms · 15 Personen 0,51 / 1,49 ms · 30 Personen 1,48 / 4,53 ms (max. 37 ms); **0 % Verlust** |
+| 30 Personen in einem Sprachraum | < 900 MB | **92 MB RSS** (Spitze 119 MB), Server-CPU 56 % eines Kerns; 15 Personen: 57 MB, 15 % |
+| Sprachraum ohne Pakete | – | ~0 % CPU (bis 0.8: 100 % eines Kerns, auch 5 min nach dem Auflegen) |
+| Voice Ende-zu-Ende Web ↔ Web **ohne Geräte** | < 100 ms | **p50 je Lauf 40–56 ms**, max. 59 ms (5 Läufe à 20–30 Klicks, 0 verloren); davon Jitter-Puffer des Browsers 29–36 ms, SFU < 1 ms |
+| Voice Mund-zu-Ohr mit echten Geräten | < 100 ms | **nicht gemessen** – Werkzeug bereit (`clicktrack`/`clickdelay`, s. u.); Mikrofon- und Ausgabepuffer kommen zu den 40–56 ms dazu |
+| Voice nativ ↔ nativ | – | **nicht gemessen** (keine Audiogeräte im Container) |
+
+Lastgenerator und Server teilen sich die vier Kerne; die 30 Teilnehmer
+senden je 50 Pakete/s à 80 Byte (≈ Opus 32 kbit/s), der SFU verschickt dabei
+43.500 Pakete/s. Ende-zu-Ende Web: zwei Headless-Chromium, die Klick-Spur
+ist das Fake-Mikrofon von A, Messpunkte sind Web-Audio-Worklets am lokalen
+Mikrofon-Stream von A und am empfangenen Stream von B (beide im selben
+Rechner, gleiche Uhr). Nicht enthalten: Hardware-Puffer von Mikrofon und
+Lautsprecher.
+
+### So wird gemessen
+
+```bash
+# SFU und 30 Personen (Server mit NOVA_VOICE_MAX_USERS=30, Release-Build)
+nova seed --users 30                       # druckt guild_id
+nova-loadtest --mode voice --users 30 --guild <guild_id> --duration 30 \
+  --server-pid $(pidof nova) --http http://127.0.0.1:8080
+curl -s http://127.0.0.1:8080/metrics | grep sfu   # SFU intern, nur lokal
+
+# Mund-zu-Ohr mit zwei Geräten A und B im selben Sprachkanal
+nova-loadtest --mode clicktrack --out click.wav --duration 60
+#   click.wav neben dem Mikrofon von A abspielen; Stereo-Rekorder:
+#   links die Klickquelle, rechts Lautsprecher/Kopfhörer von B
+nova-loadtest --mode clickdelay --wav aufnahme.wav
+```
+
 ## Messwerte v0.4.0 (14.11.2026, lokal, Windows-Build ohne mimalloc)
 
 | Budget | Ziel | Gemessen |

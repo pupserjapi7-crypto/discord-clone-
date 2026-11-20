@@ -8,10 +8,22 @@
 //! nova-loadtest --mode senders   --senders 20     --offset 0  --channel <id> --msg-rate 1
 //! nova-loadtest --mode login     --users 200
 //! nova-loadtest --mode slow      --channel <id> --duration 15
+//! nova-loadtest --mode voice     --users 30 --guild <id> --duration 30 --server-pid <pid>
+//! nova-loadtest --mode clicktrack --out click.wav --duration 60
+//! nova-loadtest --mode clickdelay --wav aufnahme.wav
 //! ```
+//!
+//! `voice`: echte str0m-Verbindungen zum SFU, Laufzeit pro Paket durch den SFU,
+//! Verluste, CPU und RAM des Servers (siehe `voice.rs`). `clicktrack` und
+//! `clickdelay`: Ende-zu-Ende-Latenz mit echten Geräten (siehe `click.rs`).
+
+mod click;
+mod voice;
 
 use std::{
     collections::HashMap,
+    net::IpAddr,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -43,6 +55,13 @@ enum Mode {
     Login,
     /// One slow reader plus a fast sender: verifies backpressure + resume.
     Slow,
+    /// Sprachkanal mit `--users` Teilnehmern (str0m): Laufzeit durch den SFU,
+    /// Verluste, CPU/RAM des Servers.
+    Voice,
+    /// Klick-Spur als WAV schreiben (`--out`, `--duration` Sekunden).
+    Clicktrack,
+    /// Stereo-Aufnahme auswerten (`--wav`): links Referenz, rechts Empfänger.
+    Clickdelay,
 }
 
 #[derive(Parser, Debug)]
@@ -78,6 +97,25 @@ struct Args {
     fetch_metrics: bool,
     #[arg(long, default_value_t = 3)]
     connect_retries: usize,
+    /// Guild für `--mode voice` (Ausgabe von `nova seed`); dort entsteht ein
+    /// Sprachkanal `lasttest`.
+    #[arg(long)]
+    guild: Option<i64>,
+    /// Bytes pro Sprachpaket (80 ≈ Opus mit 32 kbit/s).
+    #[arg(long, default_value_t = 80)]
+    payload: usize,
+    /// PID des Servers für CPU und RAM aus `/proc` (nur auf demselben Rechner).
+    #[arg(long)]
+    server_pid: Option<u32>,
+    /// Lokale Adresse für die UDP-Sockets (Standard: Richtung `--http`).
+    #[arg(long)]
+    bind_ip: Option<IpAddr>,
+    /// Ausgabe für `--mode clicktrack`.
+    #[arg(long, default_value = "click.wav")]
+    out: PathBuf,
+    /// Stereo-Aufnahme für `--mode clickdelay`.
+    #[arg(long)]
+    wav: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -126,6 +164,13 @@ async fn main() -> Result<()> {
         Mode::Login => login_burst(&args).await,
         Mode::Slow => slow_client(&args).await,
         Mode::Senders | Mode::Receivers => run_load(&args).await,
+        Mode::Voice => voice::run(&args).await,
+        Mode::Clicktrack => click::write_track(&args.out, args.duration.clamp(1, 3600) as u32),
+        Mode::Clickdelay => click::analyze(
+            args.wav
+                .as_deref()
+                .ok_or_else(|| anyhow!("--wav fehlt (Stereo-Aufnahme)"))?,
+        ),
     }
 }
 
@@ -205,7 +250,9 @@ async fn run_load(args: &Arc<Args>) -> Result<()> {
             args.senders.unwrap_or(args.users),
             args.receivers.unwrap_or(0),
         ),
-        Mode::Login | Mode::Slow => (args.senders.unwrap_or(args.users), 0),
+        Mode::Login | Mode::Slow | Mode::Voice | Mode::Clicktrack | Mode::Clickdelay => {
+            (args.senders.unwrap_or(args.users), 0)
+        }
     };
     let count = senders + receivers;
     println!(
@@ -290,6 +337,7 @@ async fn scrape(http: &str) {
                         || line.starts_with("nova_msg_latency")
                         || line.starts_with("nova_dispatch_latency")
                         || line.starts_with("nova_process_rss")
+                        || line.starts_with("nova_sfu_")
                     {
                         println!("{line}");
                     }

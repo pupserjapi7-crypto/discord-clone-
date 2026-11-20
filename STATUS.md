@@ -269,6 +269,40 @@ Server-Release-Build waren vor den Änderungen **grün**.
   Windows, Bandbreiten-Engpässe (Chrome schaltet dann selbst Schichten ab),
   Kamera im nativen Client (nicht gebaut).
 
+### Voice: Messung und SFU-Schleife (0.8.0, 20.11.2026)
+- **Drei Fehler im Raum-Thread des SFU gefunden und behoben** (alle seit dem
+  ersten Voice-Commit, also auch in der Live-Version 0.2.2):
+  1. Der Socket war schon beim ersten Lesen nicht blockierend: jeder
+     Sprachraum belegte dauerhaft **100 % eines Kerns**, auch fünf Minuten
+     nach dem Auflegen. Jetzt ~0 % im Leerlauf.
+  2. Jede gesendete Ausgabe landete als leerer Eintrag in der
+     Weiterleitungs-Warteschlange und kostete einen kompletten Durchlauf über
+     alle Verbindungen; dazu wurden bis zu 256 Pakete am Stück gelesen. Bei
+     vielen Personen lief dadurch die DTLS-Warteschlange (max. 30) über und
+     der SFU **warf Teilnehmer raus** („receive queue full“): bei 30 Personen
+     kamen 72 % der Pakete nicht an. Jetzt: Weiterleitung im Stapel, höchstens
+     24 Pakete am Stück, Aufräumen nur, wenn jemand weg ist – **0 % Verlust**.
+  3. str0m gibt geschriebene Pakete erst nach einem Zeitschritt frei; der SFU
+     (und der native Client, bis zu 5 ms) warteten dafür auf das nächste
+     Paket bzw. den nächsten Durchlauf. Bei zwei Personen sank die Laufzeit
+     durch den SFU dadurch von p50 12 ms auf **0,2 ms**.
+- **Gemessen** (Release-Build, lokal; Werte in `docs/03-roadmap.md`): SFU
+  intern p99 0,67 ms bei 30 Personen (Budget 5 ms); 30 Personen in einem
+  Raum: 0 % Verlust, p99 4,5 ms durch den SFU, 92 MB RAM, 56 % eines Kerns;
+  Ende-zu-Ende Web ↔ Web ohne Geräte p50 40–56 ms (Budget 100 ms).
+- **Werkzeuge:** `nova-loadtest --mode voice` (N echte str0m-Teilnehmer,
+  Laufzeit, Verlust, CPU/RAM des Servers), `--mode clicktrack`/`clickdelay`
+  für Mund-zu-Ohr mit echten Geräten; Metrik `nova_sfu_forward_*` in
+  `/metrics`.
+- **Sicherheit nebenbei:** `/metrics` nur noch lokal (war über den Proxy
+  öffentlich); `X-Forwarded-For` wertet den letzten Eintrag aus (der erste ist
+  vom Client fälschbar – damit ließen sich die IP-Rate-Limits umgehen).
+- **Installer:** neue `nova.env` bekommt `NOVA_SFU_PUBLIC_IP` vorbelegt,
+  fehlt sie, warnt `install.sh`; die Caddy-Vorlage setzte `camera=()` und
+  hätte die Kamera gesperrt (Header jetzt nur noch von `nova serve`).
+- **Nicht gemessen:** Mund-zu-Ohr mit Mikrofon und Lautsprecher, nativer
+  Client (keine Audiogeräte im Container), Verbindungen über echtes Internet.
+
 ### Ungelesen und Erwähnungen pro Server (0.8.0, 20.11.2026)
 - **Server-Leiste** (Web und nativ): Punkt in der Ecke, wenn ein sichtbarer
   Kanal Neues hat; rote Zahl für ungelesene Erwähnungen (`@handle`), ab 100
@@ -358,10 +392,13 @@ WASM 501 KB gzip.
 
 ## Offen
 
-1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
-   Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
-   automatisierbar.
-2. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+1. **Voice mit echten Geräten messen:** Mund-zu-Ohr mit zwei Rechnern
+   (`nova-loadtest --mode clicktrack` → abspielen und stereo aufnehmen →
+   `--mode clickdelay`, Anleitung in `docs/03-roadmap.md`), dazu einmal über
+   den VPS statt lokal. SFU, 30 Personen und Web ↔ Web ohne Geräte sind
+   gemessen.
+2. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach der Messung mit
+   Geräten.
 3. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
 4. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
    Code-Signing, Tauri-Updater.

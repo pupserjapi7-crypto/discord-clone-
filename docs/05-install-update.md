@@ -15,7 +15,10 @@ Der Installer:
 2. lädt `nova-linux-x86_64` und die zugehörige `.sha256`,
 3. **verifiziert den Checksum vor** dem Austausch,
 4. installiert nach `/opt/nova/releases/<tag>/nova` und schaltet `current` atomar um,
-5. legt Benutzer `nova`, `/etc/nova/nova.env` und die systemd-Unit an (falls nicht vorhanden),
+5. legt Benutzer `nova`, `/etc/nova/nova.env` und die systemd-Unit an (falls nicht vorhanden);
+   in eine neue `nova.env` kommt `NOVA_SFU_PUBLIC_IP` mit der Adresse der
+   Standardroute (hinter NAT von Hand korrigieren). Fehlt die Variable in einer
+   bestehenden Datei, warnt das Skript – ohne sie verbindet Sprache nie,
 6. legt das Upload-Verzeichnis `/var/lib/nova/uploads` an und trägt
    `NOVA_UPLOAD_DIR` in `nova.env` nach, falls es fehlt (ältere Installationen),
 7. installiert `/usr/local/bin/nova-backup` und einen Cronjob um 03:30

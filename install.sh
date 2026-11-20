@@ -115,11 +115,22 @@ NOVA_HASH_CONCURRENCY=1
 NOVA_LISTEN_BACKLOG=4096
 NOVA_UPLOAD_DIR=/var/lib/nova/uploads
 # Optional: NOVA_MAX_UPLOAD_BYTES=26214400, NOVA_GUILD_UPLOAD_QUOTA_BYTES=2147483648
+# Sprache: Personen pro Sprachkanal (Standard 15), UDP 40000–40100 freigeben.
+# Optional: NOVA_VOICE_MAX_USERS=15
 NOVA_UPDATE_REPO=
 RUST_LOG=info
 EOF
+	# Öffentliche IP für den SFU (ICE): Adresse der Standardroute. Hinter NAT
+	# ist das eine private Adresse – dann von Hand eintragen.
+	PUBLIC_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}' | head -n 1)
+	printf '# Öffentliche IP des Servers für Sprache (Pflicht, sonst scheitert ICE still)\nNOVA_SFU_PUBLIC_IP=%s\n' "$PUBLIC_IP" >>/etc/nova/nova.env
 	chmod 600 /etc/nova/nova.env
-	echo "==> wrote /etc/nova/nova.env — set DATABASE_URL and NOVA_PUBLIC_ORIGIN"
+	echo "==> wrote /etc/nova/nova.env — set DATABASE_URL and NOVA_PUBLIC_ORIGIN, check NOVA_SFU_PUBLIC_IP=${PUBLIC_IP:-?}"
+fi
+
+# Ohne öffentliche IP kündigt der SFU 127.0.0.1 an: Sprache verbindet dann nie.
+if ! grep -q '^NOVA_SFU_PUBLIC_IP=[0-9a-fA-F]' /etc/nova/nova.env; then
+	echo "==> WARNUNG: NOVA_SFU_PUBLIC_IP fehlt in /etc/nova/nova.env – Sprachkanäle funktionieren erst damit"
 fi
 
 # Ältere Installationen: ohne NOVA_UPLOAD_DIR zeigt der Standard auf

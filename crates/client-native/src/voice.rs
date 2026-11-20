@@ -656,6 +656,9 @@ impl Engine {
 
             self.pump_screen();
             self.pump_keyframe_requests();
+            // str0m gibt frisch geschriebene Pakete erst nach einem Zeitschritt
+            // frei; ohne ihn warteten sie bis zum nächsten Durchlauf (≤ 5 ms).
+            let _ = self.rtc.handle_input(Input::Timeout(Instant::now()));
 
             let timeout = match self.drive() {
                 Some(timeout) => timeout,

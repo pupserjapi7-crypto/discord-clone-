@@ -4,6 +4,40 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-20 — SFU-Schleife im Stapel, Voice-Last mit echten str0m-Teilnehmern
+
+**Entscheidung:** Der Raum-Thread wartet blockierend auf das erste Paket (bis
+zum nächsten str0m-Timeout), liest dann höchstens 24 weitere ohne Warten,
+leitet alle angefallenen Ereignisse in einem Zug weiter und rückt danach die
+Zeit aller Verbindungen vor, damit str0m die geschriebenen Pakete sofort
+freigibt. Leere Ausgaben kommen nicht mehr in die Warteschlange. Gemessen
+wird mit `nova-loadtest --mode voice`: N echte str0m-Teilnehmer im selben
+Prozess, Zeitstempel im Paket, daher ohne Uhrenabgleich.
+
+**Warum:** Die Schleife stammte aus dem str0m-Beispiel „chat“ und war für
+zwei, drei Personen gedacht. Mit 30 Personen kostete jedes gesendete Paket
+einen Durchlauf über alle Verbindungen; der Socket wurde selten und dann in
+großen Stapeln gelesen, die DTLS-Warteschlange (30 Datensätze) lief über,
+Verbindungen brachen ab. 24 Pakete pro Stapel halten jede Verbindung sicher
+unter der Grenze. Ein synthetischer Lasttest misst den SFU-Anteil genau und
+ist wiederholbar; Mikrofon, Kodierung und Lautsprecher misst das
+Klick-Werkzeug mit echten Geräten.
+
+## 2026-11-20 — `/metrics` nur lokal, `X-Forwarded-For` von rechts
+
+**Entscheidung:** `/metrics` antwortet nur, wenn die Verbindung von Loopback
+kommt **und** (hinter dem Proxy) die weitergereichte Adresse Loopback ist.
+`client_ip` nimmt den letzten Eintrag von `X-Forwarded-For`. `install.sh`
+belegt `NOVA_SFU_PUBLIC_IP` in einer neuen `nova.env` mit der Adresse der
+Standardroute vor und warnt, wenn die Variable fehlt.
+
+**Warum:** Die Architektur sah `/metrics` „nur auf Loopback“ vor, der Proxy
+reichte es aber öffentlich durch. Den ersten Eintrag von `X-Forwarded-For`
+setzt der Client selbst; Apache hängt die echte Adresse hinten an, Caddy
+ersetzt den Header. Die Standardroute braucht keinen externen Dienst (vgl.
+2026-11-13); hinter NAT bleibt Handarbeit, aber niemand installiert mehr
+unbemerkt einen SFU, der 127.0.0.1 ankündigt.
+
 ## 2026-11-20 — Ungelesen pro Server: gefilterter Hinweis statt Zähler im Gateway
 
 **Entscheidung:** Das Gateway zählt nichts mit. Nach einer neuen Nachricht

@@ -1200,11 +1200,24 @@ async fn readyz(State(state): State<AppState>) -> ApiResult<Json<serde_json::Val
     })))
 }
 
-async fn metrics(State(state): State<AppState>) -> String {
-    state.metrics.render(
+/// Nur für diesen Rechner (`curl http://127.0.0.1:8080/metrics`), wie in der
+/// Architektur vorgesehen. Hinter dem Proxy kommt jede Anfrage von Loopback;
+/// dort entscheidet die Adresse, die der Proxy weiterreicht.
+async fn metrics(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> ApiResult<String> {
+    let ip = client_ip(&headers, peer.ip(), state.cfg.trust_proxy);
+    if !peer.ip().is_loopback() || !ip.is_loopback() {
+        return Err(ApiError::NotFound);
+    }
+    let mut out = state.metrics.render(
         nova_common::metrics::process_rss_bytes(),
         state.started.elapsed().as_secs(),
-    )
+    );
+    out.push_str(&state.sfu.render_metrics());
+    Ok(out)
 }
 
 #[allow(dead_code)]
