@@ -917,6 +917,8 @@ struct VoiceParticipantView {
     muted: bool,
     screen: bool,
     deafened: bool,
+    /// Ab v0.8.
+    camera: bool,
 }
 
 async fn voice_channel(
@@ -940,6 +942,7 @@ fn voice_event(
         muted: participant.is_some_and(|p| p.muted),
         deafened: participant.is_some_and(|p| p.deafened),
         screen: participant.is_some_and(|p| p.screen),
+        camera: participant.is_some_and(|p| p.camera),
     }
 }
 
@@ -1015,6 +1018,9 @@ struct VoiceStateRequest {
     deafened: bool,
     #[serde(default)]
     screen: bool,
+    /// Ab v0.8; ältere Clients senden es nicht (dann bleibt die Kamera aus).
+    #[serde(default)]
+    camera: bool,
 }
 
 /// Der Client meldet Stumm/Taub/Bildschirm; alle Mitglieder sehen es sofort.
@@ -1031,6 +1037,7 @@ async fn voice_state(
         req.muted,
         req.deafened,
         req.screen,
+        req.camera,
     ) else {
         return Err(ApiError::NotFound);
     };
@@ -1058,9 +1065,46 @@ async fn voice_participants(
             muted: participant.muted,
             screen: participant.screen,
             deafened: participant.deafened,
+            camera: participant.camera,
         })
         .collect();
     Ok(json_ids(&participants))
+}
+
+/// Was der SFU selbst bemerkt (Videospur kam an oder ist weg, Verbindung
+/// abgerissen), geht als `voice_state_update` an die Guild. Ohne das sahen
+/// die anderen eine Bildschirmfreigabe erst nach dem nächsten Statusbericht
+/// und abgerissene Verbindungen gar nicht.
+pub fn spawn_sfu_events(state: AppState) {
+    let Some(events) = state.sfu.take_events() else {
+        return;
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    // Der SFU meldet über einen std-Kanal (seine Räume sind OS-Threads).
+    let spawned = std::thread::Builder::new()
+        .name("sfu-events".into())
+        .spawn(move || {
+            while let Ok(event) = events.recv() {
+                if tx.send(event).is_err() {
+                    break;
+                }
+            }
+        });
+    if spawned.is_err() {
+        tracing::warn!("SFU events thread could not start");
+        return;
+    }
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let Ok(Some(channel)) = state.db.channel(event.channel_id).await else {
+                continue;
+            };
+            state.gateway.publish_guild(
+                channel.guild_id,
+                &voice_event(&channel, event.user_id, event.participant.as_ref()),
+            );
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------

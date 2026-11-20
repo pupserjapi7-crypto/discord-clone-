@@ -422,11 +422,12 @@ pub async fn voice_state(
     muted: bool,
     deafened: bool,
     screen: bool,
+    camera: bool,
 ) -> Result<(), String> {
     send_empty(
         "POST",
         &format!("/api/v1/channels/{channel}/voice/state"),
-        Some(json!({ "muted": muted, "deafened": deafened, "screen": screen })),
+        Some(json!({ "muted": muted, "deafened": deafened, "screen": screen, "camera": camera })),
     )
     .await
 }

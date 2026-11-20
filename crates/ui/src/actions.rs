@@ -478,22 +478,35 @@ pub fn apply_voice_state(mut store: Store, state: VoiceState) {
         .and_then(|detail| detail.member(&state.user_id).cloned());
     {
         let mut rooms = store.voice_rooms.write();
-        for list in rooms.values_mut() {
-            list.retain(|p| p.user_id != state.user_id);
+        // In anderen Kanälen entfernen; im eigenen an Ort und Stelle
+        // aktualisieren, damit die Kacheln nicht springen.
+        for (channel_id, list) in rooms.iter_mut() {
+            if !state.connected || *channel_id != state.channel_id {
+                list.retain(|p| p.user_id != state.user_id);
+            }
         }
         if state.connected {
-            let member = name.unwrap_or_default();
-            rooms
-                .entry(state.channel_id.clone())
-                .or_default()
-                .push(VoiceParticipant {
-                    user_id: state.user_id.clone(),
-                    handle: member.handle,
-                    display_name: member.display_name,
-                    muted: state.muted,
-                    screen: state.screen,
-                    deafened: state.deafened,
-                });
+            let list = rooms.entry(state.channel_id.clone()).or_default();
+            match list.iter_mut().find(|p| p.user_id == state.user_id) {
+                Some(existing) => {
+                    existing.muted = state.muted;
+                    existing.screen = state.screen;
+                    existing.deafened = state.deafened;
+                    existing.camera = state.camera;
+                }
+                None => {
+                    let member = name.unwrap_or_default();
+                    list.push(VoiceParticipant {
+                        user_id: state.user_id.clone(),
+                        handle: member.handle,
+                        display_name: member.display_name,
+                        muted: state.muted,
+                        screen: state.screen,
+                        deafened: state.deafened,
+                        camera: state.camera,
+                    });
+                }
+            }
         }
         rooms.retain(|_, list| !list.is_empty());
     }
@@ -503,6 +516,14 @@ pub fn apply_voice_state(mut store: Store, state: VoiceState) {
             .voice
             .write()
             .video_users
+            .retain(|id| id != &state.user_id);
+    }
+    if !state.connected || !state.camera {
+        voice::drop_remote_camera(&state.user_id);
+        store
+            .voice
+            .write()
+            .camera_users
             .retain(|id| id != &state.user_id);
     }
     if !state.connected {
@@ -540,6 +561,7 @@ pub async fn join_voice(mut store: Store, channel: Channel) {
                 voice.muted = settings.push_to_talk;
                 voice.deafened = false;
                 voice.screen = false;
+                voice.camera = false;
             }
             if settings.push_to_talk {
                 voice::set_muted(true);
@@ -575,17 +597,18 @@ pub async fn leave_voice(mut store: Store) {
 }
 
 pub async fn report_voice_state(store: Store) {
-    let (channel, muted, deafened, screen) = {
+    let (channel, muted, deafened, screen, camera) = {
         let voice = store.voice.read();
         (
             voice.channel.clone(),
             voice.muted,
             voice.deafened,
             voice.screen,
+            voice.camera,
         )
     };
     if let Some(channel) = channel {
-        let _ = api::voice_state(&channel.id, muted, deafened, screen).await;
+        let _ = api::voice_state(&channel.id, muted, deafened, screen, camera).await;
     }
 }
 
@@ -619,8 +642,27 @@ pub async fn toggle_screen(mut store: Store) {
         voice::stop_screen();
         store.voice.write().screen = false;
     } else {
-        match voice::start_screen(store).await {
+        let settings = store.settings.read().clone();
+        match voice::start_screen(store, &settings).await {
             Ok(()) => store.voice.write().screen = true,
+            Err(err) => {
+                store.error(err);
+                return;
+            }
+        }
+    }
+    report_voice_state(store).await;
+}
+
+pub async fn toggle_camera(mut store: Store) {
+    let on = store.voice.read().camera;
+    if on {
+        voice::stop_camera();
+        store.voice.write().camera = false;
+    } else {
+        let settings = store.settings.read().clone();
+        match voice::start_camera(store, &settings).await {
+            Ok(()) => store.voice.write().camera = true,
             Err(err) => {
                 store.error(err);
                 return;

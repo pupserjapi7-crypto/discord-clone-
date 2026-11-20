@@ -197,6 +197,90 @@ fn VoiceTab() -> Element {
                 }
             }
         }
+        VideoSection {}
+    }
+}
+
+/// Bildschirm teilen, Kamera und Empfangsqualität.
+#[component]
+fn VideoSection() -> Element {
+    let mut store = use_store();
+    let cameras = use_resource(crate::voice::camera_devices);
+    let settings = store.settings.read().clone();
+    rsx! {
+        section { class: "nv-section",
+            h3 { "Bildschirm teilen" }
+            div { class: "nv-field",
+                label { class: "nv-field__label", r#for: "screen-quality", "Qualität" }
+                select {
+                    id: "screen-quality",
+                    class: "nv-select",
+                    onchange: move |event| {
+                        if let Some(quality) = ScreenQuality::ALL.into_iter().find(|q| q.key() == event.value()) {
+                            store.settings.write().screen_quality = quality;
+                            save_settings(store);
+                        }
+                    },
+                    for quality in ScreenQuality::ALL {
+                        option { key: "{quality.key()}", value: "{quality.key()}", selected: settings.screen_quality == quality, "{quality.label()}" }
+                    }
+                }
+                span { class: "nv-field__hint", "Gilt ab der nächsten Freigabe. Andere bekommen je nach Ansicht automatisch eine kleinere Stufe." }
+            }
+            label { class: "nv-check",
+                input {
+                    r#type: "checkbox",
+                    checked: settings.screen_audio,
+                    onchange: move |event| {
+                        store.settings.write().screen_audio = event.checked();
+                        save_settings(store);
+                    },
+                }
+                span { class: "nv-check__text",
+                    span { "Ton mitsenden" }
+                    span { class: "nv-check__hint", "Ton eines Tabs, unter Windows auch der Systemton – sofern der Browser es anbietet." }
+                }
+            }
+        }
+        section { class: "nv-section",
+            h3 { "Kamera" }
+            div { class: "nv-field",
+                label { class: "nv-field__label", r#for: "camera-device", "Gerät" }
+                select {
+                    id: "camera-device",
+                    class: "nv-select",
+                    onchange: move |event| {
+                        let value = event.value();
+                        store.settings.write().camera_device = (!value.is_empty()).then_some(value);
+                        save_settings(store);
+                    },
+                    option { value: "", selected: settings.camera_device.is_none(), "Systemstandard" }
+                    if let Some(list) = cameras.read().as_ref() {
+                        for (id, label) in list.clone() {
+                            option { key: "{id}", value: "{id}", selected: settings.camera_device.as_deref() == Some(id.as_str()), "{label}" }
+                        }
+                    }
+                }
+            }
+            div { class: "nv-field",
+                label { class: "nv-field__label", r#for: "receive-quality", "Empfang von Bildschirmen und Kameras" }
+                select {
+                    id: "receive-quality",
+                    class: "nv-select",
+                    onchange: move |event| {
+                        if let Some(quality) = ReceiveQuality::ALL.into_iter().find(|q| q.key() == event.value()) {
+                            store.settings.write().receive_quality = quality;
+                            save_settings(store);
+                            crate::voice::apply_layers(store);
+                        }
+                    },
+                    for quality in ReceiveQuality::ALL {
+                        option { key: "{quality.key()}", value: "{quality.key()}", selected: settings.receive_quality == quality, "{quality.label()}" }
+                    }
+                }
+                span { class: "nv-field__hint", "„Datensparend“ holt kleinere Bilder, gut für mobile Daten." }
+            }
+        }
     }
 }
 

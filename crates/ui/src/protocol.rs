@@ -216,6 +216,7 @@ pub struct VoiceState {
     pub muted: bool,
     pub deafened: bool,
     pub screen: bool,
+    pub camera: bool,
 }
 
 pub enum Dispatched {
@@ -346,6 +347,7 @@ pub fn parse_dispatch(body: &[u8]) -> Option<Dispatched> {
             muted: flag(&data, "muted"),
             deafened: flag(&data, "deafened"),
             screen: flag(&data, "screen"),
+            camera: flag(&data, "camera"),
         }),
         _ => Dispatched::Other,
     };
@@ -469,6 +471,7 @@ mod tests {
                 muted: true,
                 deafened: false,
                 screen: false,
+                camera: false,
             },
         ];
         for event in events {

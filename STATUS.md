@@ -211,6 +211,38 @@ Server-Release-Build waren vor den Änderungen **grün**.
   den Radius), Vorschaubilder (Thumbnails) erzeugt der Server nicht – große
   Fotos lädt die Web-UI in voller Größe.
 
+### Screenshare, Simulcast und Kamera (0.8.0, 20.11.2026)
+- **Simulcast mit Schichtwahl:** Bildschirm und Kamera senden aus dem Browser
+  drei H.264-Schichten (voll, ½, ¼). Der SFU wählt pro Empfänger und Spur die
+  Schicht, wechselt am Schlüsselbild (fordert es sofort an) und weicht aus,
+  wenn eine Schicht 1,5 s ausbleibt. Empfänger: Bildschirme hoch (ab drei
+  gleichzeitig mittel), Kameras mittel (ab fünf Personen klein);
+  Einstellung „Automatisch / Immer hoch / Datensparend“.
+- **Qualitätsstufen beim Teilen:** Ausgewogen (1080p30), Scharf (1440p15,
+  `contentHint: text`), Flüssig (720p60, `motion`).
+- **Ton mitsenden:** Tab-Ton bzw. Systemton (Chrome/Windows), eigene Spur
+  `s{id}` mit eigener Lautstärke/Taubschaltung, ohne Sprecher-Ring.
+- **Kamera:** Knopf im Dock, 720p30 mit Simulcast, Bild in der Kachel statt
+  Avatar, eigene Vorschau gespiegelt, Gerätewahl in den Einstellungen; Recht
+  „Video senden“ (bisher „Bildschirm teilen“). Video-Limit zählt Bildschirme
+  und Kameras (8 pro Raum).
+- **SFU räumt auf und meldet:** Beendete Spuren fallen weg (kein
+  eingefrorenes Bild mehr), Bildschirm/Kamera an/aus und Verbindungsabrisse
+  gehen sofort als `voice_state_update` an alle (vorher blieben Abgerissene
+  sichtbar, `screen` kam nur zufällig rechtzeitig an).
+- **Kompatibel:** ältere Web-Clients und der native Client bekommen weiter
+  `u{id}` für Mikrofon und Bildschirm und die hohe Schicht; `c…`/`s…`
+  übergehen sie.
+- **Getestet** (lokal, zwei Chromium mit Fake-Geräten, SFU auf der
+  Container-IP): Kamera A sendet 1280×720/640×360/320×180, B empfängt
+  640×360 (automatisch), 1280×720 (hoch), 320×180 (datensparend), Kamera aus
+  → Kachel weg; Bildschirm 1920×1080/960×540/480×270, B empfängt 1920×1080,
+  Ton als zweites Audio-Element, Freigabe aus → Bühne weg; eigene Vorschau
+  bleibt beim Beitritt anderer erhalten. Unit-Tests für Schichtwechsel und
+  Rückfall. **Nicht getestet:** echte Kameras/Bildschirme, Systemton unter
+  Windows, Bandbreiten-Engpässe (Chrome schaltet dann selbst Schichten ab),
+  Kamera im nativen Client (nicht gebaut).
+
 ### Desktop-Hülle und Web-Sicherheit (0.8.0, 20.11.2026)
 - **CSP für die Web-App** (auch in Tauri, das die Server-URL lädt): `nova
   serve` schickt für `index.html` `script-src 'self' 'wasm-unsafe-eval'`,
@@ -270,15 +302,15 @@ WASM 501 KB gzip.
 1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
    Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
    automatisierbar.
-2. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
-   Systemaudio; Kamera.
-3. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
-4. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
+2. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
+3. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
    Ungelesen-Daten für alle Server (die API liefert sie nur für den offenen).
-5. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
-6. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
-7. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
+4. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+5. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
+6. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
    Code-Signing, Tauri-Updater.
+7. Video: Kamera im nativen Client (Senden und Anzeigen), Schichtwahl im
+   nativen Client (empfängt immer „h“).
 
 ---
 

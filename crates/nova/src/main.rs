@@ -168,6 +168,7 @@ async fn serve(role: &str) -> Result<()> {
         media_limit: Arc::new(Semaphore::new(2)),
     };
     nova_api::uploads::spawn_janitor(state.clone());
+    nova_api::spawn_sfu_events(state.clone());
 
     // Janitor for auth rate-limit buckets.
     {

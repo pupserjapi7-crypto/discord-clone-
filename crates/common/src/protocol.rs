@@ -384,6 +384,9 @@ pub enum Event {
         muted: bool,
         deafened: bool,
         screen: bool,
+        /// Kamera läuft. Neu in v0.8.
+        #[serde(default)]
+        camera: bool,
     },
     /// Neue Direktnachricht. `message.channel_id` ist die ID des DM-Kanals;
     /// geht an alle Sessions beider Beteiligten. Neu in v0.6.
@@ -524,6 +527,7 @@ mod tests {
                 muted: false,
                 deafened: false,
                 screen: true,
+                camera: true,
             },
             Event::DmMessageCreate {
                 message: MessageView {

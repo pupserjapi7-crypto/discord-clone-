@@ -205,7 +205,7 @@ pub mod perm {
         (ADD_REACTIONS, "Reagieren", ""),
         (CONNECT, "Sprachkanälen beitreten", ""),
         (SPEAK, "Sprechen", ""),
-        (STREAM, "Bildschirm teilen", ""),
+        (STREAM, "Video senden", "Bildschirm teilen und Kamera"),
         (CREATE_INVITE, "Einladungen erstellen", ""),
     ];
 }
@@ -342,6 +342,9 @@ pub struct VoiceParticipant {
     pub screen: bool,
     #[serde(default)]
     pub deafened: bool,
+    /// Kamera läuft (ab Server v0.8).
+    #[serde(default)]
+    pub camera: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -386,6 +389,130 @@ pub enum Theme {
     Light,
 }
 
+/// Qualität beim Bildschirm teilen (Sender).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenQuality {
+    /// 1080p, 30 fps – Spiele und Präsentationen.
+    #[default]
+    Balanced,
+    /// 1440p, 15 fps – Code und kleine Schrift.
+    Sharp,
+    /// 720p, 60 fps – schnelle Bewegung.
+    Smooth,
+}
+
+/// Aufnahme-Profil einer Qualitätsstufe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CaptureProfile {
+    pub width: f64,
+    pub height: f64,
+    pub fps: f64,
+    /// Bitrate der hohen Simulcast-Schicht in bit/s.
+    pub bitrate: f64,
+    /// `MediaStreamTrack.contentHint`: Encoder bevorzugt Schärfe oder Bewegung.
+    pub hint: &'static str,
+}
+
+impl ScreenQuality {
+    pub const ALL: [Self; 3] = [Self::Balanced, Self::Sharp, Self::Smooth];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Balanced => "Ausgewogen (1080p, 30 fps)",
+            Self::Sharp => "Scharf (1440p, 15 fps) – Text und Code",
+            Self::Smooth => "Flüssig (720p, 60 fps) – Spiele",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Balanced => "balanced",
+            Self::Sharp => "sharp",
+            Self::Smooth => "smooth",
+        }
+    }
+
+    pub fn profile(self) -> CaptureProfile {
+        match self {
+            Self::Balanced => CaptureProfile {
+                width: 1920.0,
+                height: 1080.0,
+                fps: 30.0,
+                bitrate: 2_500_000.0,
+                hint: "detail",
+            },
+            Self::Sharp => CaptureProfile {
+                width: 2560.0,
+                height: 1440.0,
+                fps: 15.0,
+                bitrate: 3_000_000.0,
+                hint: "text",
+            },
+            Self::Smooth => CaptureProfile {
+                width: 1280.0,
+                height: 720.0,
+                fps: 60.0,
+                bitrate: 2_500_000.0,
+                hint: "motion",
+            },
+        }
+    }
+}
+
+/// Welche Simulcast-Schicht man von anderen empfängt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReceiveQuality {
+    /// Groß angezeigte Bilder in hoher, Kacheln in niedriger Auflösung.
+    #[default]
+    Auto,
+    /// Immer die höchste Schicht.
+    High,
+    /// Immer kleine Schichten (mobile Daten).
+    Saver,
+}
+
+impl ReceiveQuality {
+    pub const ALL: [Self; 3] = [Self::Auto, Self::High, Self::Saver];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Automatisch",
+            Self::High => "Immer hoch",
+            Self::Saver => "Datensparend",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::High => "high",
+            Self::Saver => "saver",
+        }
+    }
+
+    /// Schicht für einen Bildschirm (`screens` = wie viele gerade laufen).
+    pub fn screen_layer(self, screens: usize) -> &'static str {
+        match self {
+            Self::High => "h",
+            Self::Saver => "m",
+            Self::Auto if screens <= 2 => "h",
+            Self::Auto => "m",
+        }
+    }
+
+    /// Schicht für eine Kamera (`tiles` = Personen im Raster).
+    pub fn camera_layer(self, tiles: usize) -> &'static str {
+        match self {
+            Self::High => "h",
+            Self::Saver => "l",
+            Self::Auto if tiles <= 4 => "m",
+            Self::Auto => "l",
+        }
+    }
+}
+
 /// Lokale Einstellungen, in `localStorage` unter `nova.settings`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -402,6 +529,11 @@ pub struct Settings {
     pub show_members: bool,
     /// Lautstärke pro Nutzer-ID, 0.0–1.0.
     pub volumes: Vec<(String, f64)>,
+    pub screen_quality: ScreenQuality,
+    /// Ton beim Teilen mitsenden (Tab- bzw. Systemton, wo der Browser es kann).
+    pub screen_audio: bool,
+    pub receive_quality: ReceiveQuality,
+    pub camera_device: Option<String>,
 }
 
 impl Default for Settings {
@@ -416,6 +548,10 @@ impl Default for Settings {
             notifications: false,
             show_members: true,
             volumes: Vec::new(),
+            screen_quality: ScreenQuality::Balanced,
+            screen_audio: true,
+            receive_quality: ReceiveQuality::Auto,
+            camera_device: None,
         }
     }
 }

@@ -17,9 +17,9 @@ Ein schlanker, latenzoptimierter Discord-Clone in **100 % Rust** — gebaut für
 | Bot-API | **fertig** — `nb_`-Tokens für REST + Gateway, Doku `docs/04-bot-api.md`, Beispiel `examples/echo-bot` |
 | Web-UI | **neues Nova-Design** — Tokens `--nv-*`, Dark/Light/System, Command Palette, Voice-Grid, Einstellungen, Galerie `/dev/gallery` |
 | Voice | Verbindung, Sprecher-Ring, Lautstärke pro Person, Push-to-Talk, Ping, Reconnect, `voice_state_update` statt Polling; **Ende-zu-Ende-Latenz noch nicht gemessen** |
-| Screenshare | Web: 1080p60; nativ: 1080p30 (H.264/OpenH264, Windows + Linux/X11); max. 8 Streams pro Raum |
+| Screenshare & Kamera | Web: Simulcast (3 Schichten, Empfänger wählt), Qualitätsstufen bis 1440p, Ton mitsenden, Kamera 720p; nativ: Bildschirm 1080p30 (H.264/OpenH264, Windows + Linux/X11); max. 8 Videospuren pro Raum |
 | Desktop | Tauri-2-Hülle (Tray, native Benachrichtigungen, optionaler Autostart, CSP) + nativer iced-Client mit In-App-Update |
-| Offen | Simulcast-Schichten, Latenzmessung – siehe `STATUS.md` |
+| Offen | Latenzmessung mit echten Geräten, Kamera im nativen Client – siehe `STATUS.md` |
 
 Screenshots: [`docs/screenshots/`](docs/screenshots/).
 

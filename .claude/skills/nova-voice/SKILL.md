@@ -29,8 +29,31 @@ description: Arbeit am Voice- und Screenshare-Pfad von Project Nova – str0m-SF
   Dekodier-Thread, Videospur per eigenem Offer über den DataChannel. Testen
   ohne Klicks mit Debug-Build: `NOVA_DEV_VOICE=1` (+ `NOVA_DEV_SHARE=1` bzw.
   `NOVA_DEV_WATCH=1`).
-- **Simulcast**: nur die hohe Schicht (`rid = "h"`) wird weitergeleitet, siehe
-  `docs/DECISIONS.md`.
+- **Rollen**: Offers über den DataChannel tragen `"roles": {"<mid>": "screen" |
+  "screen-audio" | "camera"}`. Stream-IDs nach Rolle: `u{id}` Mikrofon und
+  Bildschirm, `s{id}` Bildschirm-Ton, `c{id}` Kamera (`TrackRole::stream_id`).
+  Nie bestehende Rollen auf andere Präfixe legen – ältere Clients erkennen nur `u`.
+- **Simulcast**: Browser senden `h`/`m`/`l` (`simulcast_encodings` in
+  `crates/ui/src/voice.rs`). Der SFU hält pro Empfänger und Spur `Layers`
+  (Wunsch, aktive Schicht, zuletzt gesehen); Wechsel am Schlüsselbild, Rückfall
+  nach 1,5 s ohne Pakete. Empfänger wählen mit
+  `{"type":"layer","mid":"…","rid":"h|m|l"}` (`apply_layers`). Ohne Wunsch: `h`.
+- **Ereignisse**: Was der SFU selbst bemerkt (Videospur da/weg, Abriss), geht
+  über `Sfu::take_events` → `nova_api::spawn_sfu_events` → `voice_state_update`.
+  Neue Flags in `Participant` immer dort mitschicken.
+- **Kamera**: Web-Client, 720p30 mit Simulcast, eigene Vorschau gespiegelt in
+  `#cslot-{id}`. Der native Client zeigt Kameras (noch) nicht an.
+
+## Testen in der Cloud-Sandbox
+
+- ICE klappt nur, wenn der SFU die Container-IP ankündigt
+  (`NOVA_SFU_PUBLIC_IP=192.0.2.2` o. ä., siehe `/etc/hosts`); `127.0.0.1`
+  scheitert still (Chrome sendet von der Container-IP).
+- Chromium mit `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream`
+  liefert Fake-Mikrofon und -Kamera; mit
+  `--auto-select-desktop-capture-source=Entire screen` auch `getDisplayMedia`.
+- Empfangene Auflösung prüfen: `getStats()` → `inbound-rtp` (`frameWidth`),
+  gesendete Schichten: `outbound-rtp` (`rid`).
 
 ## Client (Web, `crates/ui/src/voice.rs`)
 

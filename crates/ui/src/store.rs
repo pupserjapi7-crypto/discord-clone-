@@ -57,6 +57,10 @@ pub struct VoiceUi {
     pub speaking: Vec<String>,
     /// Nutzer-IDs mit aktivem Videostream (Kacheln).
     pub video_users: Vec<String>,
+    /// Eigene Kamera läuft.
+    pub camera: bool,
+    /// Nutzer-IDs, deren Kamerabild angekommen ist.
+    pub camera_users: Vec<String>,
 }
 
 /// Datei im Composer: lädt hoch, ist fertig oder fehlgeschlagen.

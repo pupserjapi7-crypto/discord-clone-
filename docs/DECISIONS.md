@@ -4,6 +4,50 @@ Kurzbegründungen für Weichenstellungen, die den Rahmen des Auftrags
 („alles in Rust, ein VPS, 30 Nutzer, Voice zuerst“) konkretisieren. Neueste
 Einträge oben.
 
+## 2026-11-20 — Echtes Simulcast mit Schichtwahl pro Empfänger
+
+**Entscheidung:** Bildschirm und Kamera senden aus dem Browser drei H.264-
+Schichten (`h` voll, `m` ½, `l` ¼; Bitraten aus der Qualitätsstufe). Der SFU
+führt pro Empfänger und Spur eine Wunschschicht (`Layers` in
+`crates/voice-sfu`): gewechselt wird erst am Schlüsselbild der neuen Schicht
+(bis dahin läuft die alte weiter, das Schlüsselbild wird sofort angefordert);
+sendet der Absender die gewünschte Schicht 1,5 s nicht, nimmt der SFU die
+nächstbeste. Empfänger wählen über den DataChannel
+`{"type":"layer","mid":"…","rid":"h|m|l"}`: Bildschirme hoch (ab drei
+gleichzeitig mittel), Kameras mittel (ab fünf Personen klein), dazu die
+Einstellung „Immer hoch“/„Datensparend“. Ohne Wunsch bleibt es bei „h“ –
+genau wie bisher, der native Client ändert sich nicht.
+
+**Warum:** Ersetzt „ein 1080p-Layer“ vom 2026-11-13. Mit Kameras sind acht
+Videospuren pro Raum realistisch; nur mit kleinen Schichten für Kacheln passt
+das in die Upload-Bandbreite des VPS. Gemessen (lokal, zwei Chromium): Kamera
+1280×720 → B empfängt 640×360 (automatisch), 1280×720 (hoch), 320×180
+(datensparend); Bildschirm 1920×1080 in voller Auflösung.
+
+## 2026-11-20 — Rollen der Spuren und Stream-IDs
+
+**Entscheidung:** Der Client schickt mit jedem Neuverhandlungs-Offer
+`"roles": {"<mid>": "screen" | "screen-audio" | "camera"}`. Der SFU vergibt
+danach die Stream-IDs: `u{id}` Mikrofon und Bildschirm (wie bisher),
+`s{id}` Ton der Bildschirmfreigabe, `c{id}` Kamera. Ohne Rolle gilt Ton als
+Mikrofon und Bild als Bildschirm.
+
+**Warum:** Ältere Clients (Web 0.7, nativer Client) erkennen weiter Mikrofon
+und Bildschirm an `u…` und übergehen `s…`/`c…`, statt sie falsch zuzuordnen.
+Der native Client mischt Bildschirm-Ton trotzdem mit (er spielt jede
+Tonspur), nur ohne Sprecher-Ring.
+
+## 2026-11-20 — SFU meldet eigene Beobachtungen
+
+**Entscheidung:** Der SFU schickt über einen Kanal (`Sfu::take_events`), wenn
+eine Videospur ankommt oder wegfällt und wenn eine Verbindung abreißt; die API
+verteilt das als `voice_state_update`. Beendete Spuren (Richtung ohne
+Empfang) räumt der SFU selbst ab.
+
+**Warum:** Vorher kam `screen = true` nur zufällig rechtzeitig an (der Client
+meldete seinen Zustand, bevor der SFU die Spur kannte), und wer per
+ICE-Abbruch herausfiel, blieb für die anderen sichtbar im Raum.
+
 ## 2026-11-20 — Uploads: Metadaten filtern statt Bilder neu kodieren
 
 **Entscheidung:** Bilder werden nicht mit `image` neu kodiert (wie in
@@ -206,7 +250,7 @@ Persistenz- und Testpfad ohne funktionalen Mehrwert.
 Chat; Nachrichten und Composer werden unruhig. Die Vorgabe nannte „ca.
 900 px“, die frühere Schwelle ist die robustere Variante.
 
-## 2026-11-13 — Screenshare: ein 1080p-Layer, kein erzwungenes Simulcast
+## 2026-11-13 — Screenshare: ein 1080p-Layer, kein erzwungenes Simulcast (ersetzt 2026-11-20)
 
 **Entscheidung:** Der Sender erzeugt eine 1080p60-Spur; die Leitung wählt die
 Auflösung über `contentHint` und Bitraten-Deckel. Simulcast wird nicht

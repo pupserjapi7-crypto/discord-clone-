@@ -65,6 +65,7 @@ impl AppState {
                         muted: false,
                         deafened: false,
                         screen: false,
+                        camera: false,
                     },
                 );
             }

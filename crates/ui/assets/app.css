@@ -666,6 +666,12 @@ a.nv-btn, a.nv-iconbtn { text-decoration: none; }
 .nv-tile__slot:empty { display: none; }
 .nv-tile__wait { display: grid; justify-items: center; gap: var(--nv-s-2); color: var(--nv-text-3); font-size: var(--nv-fs-13); }
 .nv-tile__video { width: 100%; height: 100%; object-fit: contain; background: var(--nv-bg-0); }
+/* Kamera füllt die Kachel; die eigene Vorschau ist gespiegelt wie ein Spiegel. */
+.nv-tile--camera { background: var(--nv-bg-0); }
+.nv-tile--camera .nv-tile__video { object-fit: cover; border-radius: inherit; }
+.nv-tile__video--mirror { transform: scaleX(-1); }
+.nv-tile--camera .nv-tile__name { z-index: 1; }
+.nv-tile--camera .nv-tile__icons { z-index: 1; }
 .nv-tile__name {
     position: absolute; left: var(--nv-s-2); bottom: var(--nv-s-2);
     display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 16px);
