@@ -181,9 +181,13 @@ async fn serve(role: &str) -> Result<()> {
         });
     }
 
-    let app = nova_api::router(state)
-        .merge(gateway.router())
-        .fallback(static_asset);
+    let page = Arc::new(PageHeaders::new(&cfg.public_origin));
+    let app = nova_api::router(state).merge(gateway.router()).fallback(
+        move |uri: Uri, headers: axum::http::HeaderMap| {
+            let page = Arc::clone(&page);
+            async move { static_asset(&uri, &headers, &page) }
+        },
+    );
 
     let listener = bind_listener(cfg.bind_addr, cfg.listen_backlog)?;
     info!(
@@ -254,39 +258,111 @@ async fn shutdown_signal() {
     info!("shutdown signal received");
 }
 
-async fn static_asset(uri: Uri) -> Response {
-    let path = uri.path().trim_start_matches('/');
-    let path = if path.is_empty() { "index.html" } else { path };
+/// Sicherheits-Header für die Web-App (gilt auch in der Tauri-Hülle, die die
+/// Server-URL lädt).
+struct PageHeaders {
+    csp: HeaderValue,
+}
 
-    if let Some(file) = Assets::get(path) {
-        return asset_response(path, file.data.into_owned());
-    }
-    // SPA fallback for client-side routes.
-    match Assets::get("index.html") {
-        Some(file) => asset_response("index.html", file.data.into_owned()),
-        None => (
-            StatusCode::NOT_FOUND,
-            "frontend not built: run `dx build --platform web --release --features web` in crates/ui",
-        )
-            .into_response(),
+impl PageHeaders {
+    fn new(public_origin: &str) -> Self {
+        Self {
+            csp: HeaderValue::from_str(&content_security_policy(public_origin))
+                .unwrap_or_else(|_| HeaderValue::from_static("default-src 'self'")),
+        }
     }
 }
 
-fn asset_response(path: &str, data: Vec<u8>) -> Response {
-    let cache = if path.starts_with("_app/immutable/") {
-        "public, max-age=31536000, immutable"
-    } else {
-        "no-cache"
+/// CSP der Web-App. WASM braucht `wasm-unsafe-eval` (nicht `unsafe-eval`);
+/// Dioxus setzt Style-Attribute, daher `unsafe-inline` nur für Styles.
+/// `connect-src` nennt Gateway-URL zusätzlich ausdrücklich, weil ältere
+/// Browser `'self'` nicht auf `wss:` anwenden.
+fn content_security_policy(public_origin: &str) -> String {
+    let origin = public_origin.trim_end_matches('/');
+    let socket = origin
+        .strip_prefix("https://")
+        .map(|host| format!(" wss://{host}"))
+        .or_else(|| {
+            origin
+                .strip_prefix("http://")
+                .map(|host| format!(" ws://{host}"))
+        })
+        .unwrap_or_default();
+    format!(
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
+         style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; \
+         media-src 'self' blob:; font-src 'self'; connect-src 'self'{socket}; \
+         object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    )
+}
+
+fn static_asset(uri: &Uri, request: &axum::http::HeaderMap, page: &PageHeaders) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
+
+    let file = Assets::get(path).map(|file| (path, file));
+    // SPA fallback for client-side routes.
+    let Some((path, file)) = file.or_else(|| Assets::get("index.html").map(|f| ("index.html", f)))
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            "frontend not built: run `cargo xtask ui`",
+        )
+            .into_response();
     };
-    let mut response = Response::new(Body::from(data));
-    response.headers_mut().insert(
+    let etag = format!("\"{}\"", hex::encode(file.metadata.sha256_hash()));
+    let fresh = request
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag));
+    let mut response = if fresh {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        Response::new(Body::from(file.data.into_owned()))
+    };
+    let headers = response.headers_mut();
+    headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static(content_type(path)),
     );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control(path)),
+    );
+    if let Ok(value) = HeaderValue::from_str(&etag) {
+        headers.insert(header::ETAG, value);
+    }
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    if path.ends_with(".html") {
+        headers.insert(header::CONTENT_SECURITY_POLICY, page.csp.clone());
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+        headers.insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        );
+        headers.insert(
+            "permissions-policy",
+            HeaderValue::from_static(
+                "camera=(self), microphone=(self), display-capture=(self), geolocation=()",
+            ),
+        );
+    }
     response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
-    response
+}
+
+/// `dx` hängt einen Inhalts-Hash an (`nova-ui-dxh…`): solche Dateien ändern
+/// sich nie und dürfen ein Jahr im Cache bleiben. Alles andere wird per ETag
+/// revalidiert (304 statt 1,3 MB WASM bei jedem Laden).
+fn cache_control(path: &str) -> &'static str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if path.starts_with("assets/") && name.contains("-dxh") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
 }
 
 fn content_type(path: &str) -> &'static str {
@@ -433,4 +509,30 @@ async fn doctor() -> Result<()> {
 #[allow(dead_code)]
 fn _router_type(state: AppState) -> Router {
     nova_api::router(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csp_allows_wasm_and_own_gateway_only() {
+        let csp = content_security_policy("https://nova.example.com/");
+        assert!(csp.contains("script-src 'self' 'wasm-unsafe-eval';"));
+        assert!(!csp.contains("'unsafe-eval'"));
+        assert!(csp.contains("connect-src 'self' wss://nova.example.com;"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+        let local = content_security_policy("http://127.0.0.1:8080");
+        assert!(local.contains("connect-src 'self' ws://127.0.0.1:8080;"));
+    }
+
+    #[test]
+    fn hashed_assets_are_immutable() {
+        assert_eq!(
+            cache_control("assets/nova-ui_bg-dxh49d97b95977e67a0.wasm"),
+            "public, max-age=31536000, immutable"
+        );
+        assert_eq!(cache_control("assets/app.css"), "no-cache");
+        assert_eq!(cache_control("index.html"), "no-cache");
+    }
 }

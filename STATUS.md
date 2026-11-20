@@ -211,6 +211,31 @@ Server-Release-Build waren vor den Änderungen **grün**.
   den Radius), Vorschaubilder (Thumbnails) erzeugt der Server nicht – große
   Fotos lädt die Web-UI in voller Größe.
 
+### Desktop-Hülle und Web-Sicherheit (0.8.0, 20.11.2026)
+- **CSP für die Web-App** (auch in Tauri, das die Server-URL lädt): `nova
+  serve` schickt für `index.html` `script-src 'self' 'wasm-unsafe-eval'`,
+  `connect-src 'self'` + eigenes Gateway, `frame-ancestors 'none'`,
+  `object-src 'none'`, dazu `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, `nosniff`. Geprüft per Playwright: Anmeldung, Senden,
+  Palette, Upload, Bildansicht und Voice-Beitritt ohne einen CSP-Verstoß.
+  `tauri.conf.json`: dieselbe Richtlinie statt `csp: null`.
+- **Caching:** gehashte Dateien (`assets/*-dxh*`) ein Jahr `immutable`, alles
+  andere mit `ETag`/`304`. Vorher lud jeder Aufruf das 1,3-MB-WASM neu.
+- **Tauri:** Tray („Nova anzeigen“, „Mit dem System starten“, „Beenden“,
+  Linksklick zeigt das Fenster), Schließen legt in den Tray, native
+  Benachrichtigungen über `tauri-plugin-notification` (ersetzt
+  `window.Notification`, die Web-App bleibt unverändert; die Server-URL bekommt
+  nur drei Benachrichtigungsrechte), Autostart optional über den Tray (startet
+  versteckt), eine Instanz.
+- **Installer:** NSIS-Deinstallation entfernt den Autostart-Eintrag
+  (`desktop/src-tauri/windows/hooks.nsh`), deb hängt von
+  `libayatana-appindicator3-1` ab, Release-Workflow installiert die
+  AppIndicator-Header. `Cargo.lock` der Hülle ist jetzt eingecheckt.
+- **Getestet** (lokal, Linux/WebKitGTK unter Xvfb): Build, Fenster lädt die
+  App mit CSP, Tray-Aufbau ohne Absturz. **Nicht getestet:** Tray-Menü,
+  Benachrichtigungen und Autostart auf echtem Windows/Linux-Desktop (hier kein
+  D-Bus), MSI-Deinstallation (entfernt den Autostart-Eintrag noch nicht).
+
 ### P3 Features
 - Moderation: Rollen-Editor, Rollen zuweisen, Kanal-Overrides (API), Kick,
   Bann/Entbannen, Timeout, Slowmode, Löschen/Anpinnen, Audit-Log – mit
@@ -245,16 +270,15 @@ WASM 501 KB gzip.
 1. **Voice messen:** Ende-zu-Ende-Latenz und SFU-Weiterleitung mit zwei echten
    Geräten (Click-Track-Harness), 30-Nutzer-Test. Ohne Mikrofon nicht
    automatisierbar.
-2. **Tauri:** CSP statt `null`, Tray (Anzeigen/Beenden), native
-   Benachrichtigungen, Autostart optional. Lokal nicht baubar ohne MSVC/WebView2-SDK;
-   die CI baut die Installer.
-3. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
+2. **Screenshare:** echtes Simulcast mit Layer-Wahl, Qualitätsstufen,
    Systemaudio; Kamera.
-4. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
-5. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
+3. Rollen-UI für Kanal-Overrides (API vorhanden), Forum-Kanäle, Webhooks.
+4. Server-Leiste: Ungelesen-Punkt und Erwähnungs-Zahl pro Server brauchen
    Ungelesen-Daten für alle Server (die API liefert sie nur für den offenen).
-6. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
-7. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
+5. P6 (Custom-Emojis, Soundboard, Status-Texte) erst nach Voice-Messung.
+6. Uploads: serverseitige Vorschaubilder für große Fotos; DMs in der Web-App.
+7. Desktop: Tray, Benachrichtigungen und Autostart auf echten Rechnern prüfen;
+   Code-Signing, Tauri-Updater.
 
 ---
 
